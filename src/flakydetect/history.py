@@ -34,6 +34,10 @@ class HistoryConfig:
     artifact_pattern: str = DEFAULT_PATTERN
     max_artifact_mb: int = 200
     max_results_per_repo: int = 300_000
+    repo_patterns: dict[str, str] = field(default_factory=dict)  # per-repo artifact_pattern
+
+    def pattern_for(self, repo: str) -> str:
+        return self.repo_patterns.get(repo, self.artifact_pattern)
 
 
 def load_config(path: str | Path = "history.toml") -> HistoryConfig:
@@ -193,7 +197,7 @@ def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryCon
     All shards of one environment in a run are stored together as one test run."""
     out = ImportResult(repo)
     branch = default_branch(client, repo)
-    runs, _ = junit_runs(client, repo, cfg.artifact_pattern, branch, max_pages, cfg.max_runs)
+    runs, _ = junit_runs(client, repo, cfg.pattern_for(repo), branch, max_pages, cfg.max_runs)
     for run_id, arts in runs.items():
         if out.results >= cfg.max_results_per_repo:
             out.errors.append(f"stopped at max_results_per_repo={cfg.max_results_per_repo}")

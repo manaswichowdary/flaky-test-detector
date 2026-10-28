@@ -159,6 +159,9 @@ def test_load_config(tmp_path):
 def test_repo_history_toml_is_valid():
     cfg = load_config("history.toml")
     assert len(cfg.candidates) >= 2 and cfg.max_results_per_repo > 0
+    assert len(cfg.repos) == 2
+    assert cfg.pattern_for("home-assistant/core") == "^test-results-full-"
+    assert cfg.pattern_for("other/repo") == cfg.artifact_pattern
 
 
 def test_import_history_cli_noop_without_repos(tmp_path, monkeypatch, capsys):

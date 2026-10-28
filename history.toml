@@ -17,9 +17,18 @@ candidates = [
     "grafana/k6",
     "spring-projects/spring-framework",
 ]
-repos = []              # the 2 chosen repos, filled in after discovery
+# Chosen from the discovery run on 2026-10-28 (10/10 sampled default-branch runs had JUnit):
+#   home-assistant/core  ~1.7 MB/run  (pytest, 10 shards)
+#   apache/druid         ~57.6 MB/run (Maven Surefire)
+repos = ["home-assistant/core", "apache/druid"]
 max_runs = 30           # workflow runs per repo (newest first, default branch)
 sample_pages = 3        # pages of 100 artifacts scanned per candidate during discovery
 artifact_pattern = "(?i)(junit|test-?results?|test-?reports?|surefire)"
 max_artifact_mb = 200
 max_results_per_repo = 300000   # keeps the Supabase free tier (500 MB) safe
+
+[history.repo_patterns]
+# Only the main suite; the MariaDB/Postgres variants would spend the row budget on
+# duplicate environments instead of more runs.
+"home-assistant/core" = "^test-results-full-"
+"apache/druid" = "^unit-test-reports-"

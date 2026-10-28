@@ -98,7 +98,7 @@ def cmd_discover_history(args, settings) -> int:
     client = GitHubClient()
     lines = [client.rate_limit()]
     for repo in repos:
-        lines.append(history.discover(client, repo, cfg.artifact_pattern, cfg.sample_pages).summary())
+        lines.append(history.discover(client, repo, cfg.pattern_for(repo), cfg.sample_pages).summary())
         print(lines[-1], flush=True)
     # One annotation for everything: GitHub keeps only 10 notices per step.
     output.result("discover-history", "\n".join(lines))
