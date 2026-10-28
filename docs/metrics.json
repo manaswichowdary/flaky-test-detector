@@ -1,25 +1,30 @@
 {
   "demo_repo": "manaswichowdary/flaky-test-detector",
-  "demo_test_runs": 39,
-  "demo_workflow_runs": 13,
-  "failed_workflow_runs": 13,
+  "demo_results": 1800,
+  "demo_test_runs": 54,
+  "demo_workflow_runs": 18,
+  "failed_workflow_runs": 18,
   "false_alarms": [],
-  "generated_at": "2026-10-28 20:46 UTC",
+  "generated_at": "2026-10-28 21:08 UTC",
   "history": [
     {
+      "flagged": 0,
       "repo": "apache/druid",
       "sample_one_in": 120,
       "sampled_results": 75973,
       "sampled_tests": 2533,
       "test_runs": 30,
+      "top": [],
       "workflow_runs": 30
     },
     {
+      "flagged": 0,
       "repo": "home-assistant/core",
       "sample_one_in": 40,
       "sampled_results": 33887,
       "sampled_tests": 2627,
       "test_runs": 16,
+      "top": [],
       "workflow_runs": 16
     }
   ],
@@ -39,10 +44,10 @@
   "repos": {
     "apache/druid": 30,
     "home-assistant/core": 16,
-    "manaswichowdary/flaky-test-detector": 13
+    "manaswichowdary/flaky-test-detector": 18
   },
-  "reruns_avoided": 13,
-  "test_runs": 85,
+  "reruns_avoided": 18,
+  "test_runs": 100,
   "time_to_issue_minutes": [
     0.1,
     0.2,
@@ -51,5 +56,6 @@
     0.5,
     0.7
   ],
-  "workflow_runs": 59
+  "total_results": 111660,
+  "workflow_runs": 64
 }

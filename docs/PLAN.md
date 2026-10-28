@@ -82,15 +82,21 @@ The README opens with the problem, the measured results and one hard decision (q
 5. **Step 8 report:** before moving to Step 9, I report which 2 repos I chose and how many runs/test results I imported.
 
 ## Manual checklist (I pause and tell you at each point)
-- [ ] **Before Step 7 live check:** create the Supabase project and send me the connection string. I won't need the URL value itself; you add it as the `FLAKY_DATABASE_URL` repo secret (Settings → Secrets and variables → Actions). I use it locally only if you choose to export it in this session.
-- [ ] **Before Step 7 live check:** confirm Actions are enabled and the workflow permissions allow `GITHUB_TOKEN` to write issues and PRs.
-- [ ] **Step 7:** open (or let me open) the test PR that triggers `demo.yml`, then confirm the comment and issue appear.
-- [ ] **Step 8:** history import needs a token with public-repo read access to download artifacts. I'll use the session's `gh` auth or a `GITHUB_TOKEN` you export, never committed.
-- [ ] **Step 10:** enable GitHub Pages (Settings → Pages → Source: GitHub Actions).
-- [ ] **Step 11:** let `demo.yml` accumulate enough runs (I'll say how many) before taking the final measurements.
+- [x] **Before Step 7 live check:** create the Supabase project and send me the connection string. I won't need the URL value itself; you add it as the `FLAKY_DATABASE_URL` repo secret (Settings → Secrets and variables → Actions). I use it locally only if you choose to export it in this session.
+- [x] **Before Step 7 live check:** confirm Actions are enabled and the workflow permissions allow `GITHUB_TOKEN` to write issues and PRs.
+- [x] **Step 7:** open (or let me open) the test PR that triggers `demo.yml`, then confirm the comment and issue appear.
+- [x] **Step 8:** history import needs a token with public-repo read access to download artifacts. I'll use the session's `gh` auth or a `GITHUB_TOKEN` you export, never committed.
+- [x] **Step 10:** enable GitHub Pages (Settings → Pages → Source: GitHub Actions).
+- [x] **Step 11:** let `demo.yml` accumulate enough runs (I'll say how many) before taking the final measurements.
 
 ## Verification
 - `pytest` (SQLite) and `TEST_POSTGRES_URL=... pytest` both pass locally and in CI.
 - `playwright` tests pass against the generated report.
 - End to end on GitHub: push the demo workflow, open a test PR, confirm the PR comment and a quarantine issue appear, and confirm the nightly report is published.
 - `flakydetect metrics` output matches the README numbers.
+
+## Status (2026-10-28)
+
+All steps are complete. PR #1 (steps 0-11) was merged to `main`. The nightly report
+deploys to https://manaswichowdary.github.io/flaky-test-detector/. Measured results are in
+the README and `docs/metrics.json`, and the history import report is in `docs/history.md`.

@@ -32,7 +32,9 @@ class HistoryRepo:
     test_runs: int
     sample_one_in: int          # 1 = not sampled
     sampled_tests: int          # distinct tests stored
-    sampled_results: int        # test results stored
+    sampled_results: int        # test results stored (individual test executions)
+    flagged: int = 0            # tests the scorer flags flaky: unverified candidates
+    top: list[dict] = field(default_factory=list)  # top 3 by score: test_id, score, flagged
 
     @property
     def results_per_run(self) -> float:
@@ -63,8 +65,13 @@ class Metrics:
     workflow_runs: int
     repos: dict[str, int] = field(default_factory=dict)  # repo -> workflow runs
     demo_test_runs: int = 0
+    demo_results: int = 0       # individual test executions in demo runs
     history: list[HistoryRepo] = field(default_factory=list)
     generated_at: str = ""
+
+    @property
+    def total_results(self) -> int:
+        return self.demo_results + sum(h.sampled_results for h in self.history)
 
     @property
     def median_minutes(self) -> float | None:
@@ -77,11 +84,12 @@ class Metrics:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["median_minutes"], d["max_minutes"] = self.median_minutes, self.max_minutes
+        d["total_results"] = self.total_results
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Metrics":
-        d = {k: v for k, v in d.items() if k not in ("median_minutes", "max_minutes")}
+        d = {k: v for k, v in d.items() if k not in ("median_minutes", "max_minutes", "total_results")}
         d["history"] = [HistoryRepo(**h) for h in d.get("history", [])]
         return cls(**d)
 
@@ -108,6 +116,10 @@ class Metrics:
             f"| Total CI test runs analyzed | **{self.test_runs:,}** test runs from {self.workflow_runs:,} "
             f"workflow runs | Live: {self.demo_test_runs:,} demo test runs + {hist_test_runs:,} imported "
             f"from {hist_runs:,} public workflow runs (sampled, below) |",
+            f"| Total test results analyzed (individual test executions) | **{self.total_results:,}** | "
+            + "; ".join([f"Live demo: {self.demo_results:,}"]
+                        + [f"{h.repo}: {h.sampled_results:,} (sampled 1 in {h.sample_one_in})"
+                           for h in self.history]) + " |",
         ]
         if self.history:
             lines += [
@@ -117,15 +129,24 @@ class Metrics:
                 "100k-results-per-repo budget. Full-suite sizes are estimates (sampled count × N).",
                 "",
                 "| Repo | Workflow runs | Sampling | Tests analyzed (sampled) | Results analyzed (sampled) "
-                "| ≈ Full suite |",
-                "|---|---|---|---|---|---|",
+                "| ≈ Full suite | Flagged flaky (unverified) |",
+                "|---|---|---|---|---|---|---|",
             ]
             for h in self.history:
                 sampling = f"1 in {h.sample_one_in} tests" if h.sample_one_in > 1 else "all tests"
                 lines.append(
                     f"| {h.repo} | {h.workflow_runs} | {sampling} | {h.sampled_tests:,} | {h.sampled_results:,} "
                     f"| ≈ {h.sampled_tests * h.sample_one_in:,} tests, ≈ {h.approx_full_results_per_run:,} "
-                    f"results/run, ≈ {h.approx_full_results:,} results |")
+                    f"results/run, ≈ {h.approx_full_results:,} results | {h.flagged} |")
+            lines += ["", "Top candidates by score in imported history. These are **unverified**: "
+                          "the scorer flagged or scored them, but nobody has confirmed they are flaky."]
+            for h in self.history:
+                if h.top:
+                    tops = ", ".join(f"`{t['test_id']}` ({t['score']:.2f}"
+                                     f"{', flagged' if t['flagged'] else ', below threshold'})" for t in h.top)
+                else:
+                    tops = "none: every sampled test scored 0"
+                lines.append(f"- {h.repo}: {tops}")
         return "\n".join(lines)
 
 
@@ -147,6 +168,12 @@ def _history(engine: Engine, sample: dict[str, int]) -> list[HistoryRepo]:
                 select(func.count(), func.count(db.test_results.c.test_pk.distinct()))
                 .select_from(db.test_results.join(db.runs))
                 .where(db.runs.c.repo == repo, db.runs.c.source == "history")).one()
+            scored = select(db.tests.c.test_id, db.test_scores.c.score, db.test_scores.c.is_flaky) \
+                .select_from(db.test_scores.join(db.tests)).where(db.tests.c.repo == repo)
+            flagged = conn.execute(select(func.count()).select_from(
+                scored.where(db.test_scores.c.is_flaky.is_(True)).subquery())).scalar_one()
+            top = conn.execute(scored.where(db.test_scores.c.score > 0)
+                               .order_by(db.test_scores.c.score.desc(), db.tests.c.test_id).limit(3)).all()
             out.append(HistoryRepo(
                 repo=repo,
                 workflow_runs=len({(workflow_run_id(k), a) for k, a in run_keys}),
@@ -154,6 +181,9 @@ def _history(engine: Engine, sample: dict[str, int]) -> list[HistoryRepo]:
                 sample_one_in=sample.get(repo, 1),
                 sampled_tests=tests,
                 sampled_results=results,
+                flagged=flagged,
+                top=[{"test_id": t.test_id, "score": round(t.score, 4), "flagged": bool(t.is_flaky)}
+                     for t in top],
             ))
     return out
 
@@ -235,6 +265,7 @@ def compute(engine: Engine, demo_repo: str, planted: dict[str, str], demo_prefix
         workflow_runs=sum(len(v) for v in per_repo.values()),
         repos={repo: len(v) for repo, v in per_repo.items()},
         demo_test_runs=len({(r.run_id, r.run_attempt) for r in results}),
+        demo_results=len(results),
         history=_history(engine, sample or {}),
         generated_at=(now or db.utcnow()).strftime("%Y-%m-%d %H:%M UTC"),
     )

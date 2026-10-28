@@ -18,23 +18,31 @@ quarantine issue so someone fixes the root cause.
 
 ## Measured results
 
+Live report of the flakiest tests, rebuilt nightly:
+**https://manaswichowdary.github.io/flaky-test-detector/**
+
 <!-- metrics:start -->
 | Metric | Result | Source |
 |---|---|---|
-| Planted flaky tests found | **6 of 6** | Live: `demo.yml` runs on GitHub (13 workflow runs, 39 test runs) |
-| False alarms | **0** | Live: `demo.yml` runs on GitHub (13 workflow runs, 39 test runs) |
-| Reruns avoided on the demo repo | **13 of 13** failed CI runs had only flaky failures | Live: `demo.yml` runs on GitHub (13 workflow runs, 39 test runs) |
+| Planted flaky tests found | **6 of 6** | Live: `demo.yml` runs on GitHub (18 workflow runs, 54 test runs) |
+| False alarms | **0** | Live: `demo.yml` runs on GitHub (18 workflow runs, 54 test runs) |
+| Reruns avoided on the demo repo | **18 of 18** failed CI runs had only flaky failures | Live: `demo.yml` runs on GitHub (18 workflow runs, 54 test runs) |
 | Time from a flaky failure to a quarantine issue | **median 0.3 min, max 0.7 min (6 issues)** | Live: failing run's completion time to the GitHub issue's `created_at` |
-| Total CI test runs analyzed | **85** test runs from 59 workflow runs | Live: 39 demo test runs + 46 imported from 46 public workflow runs (sampled, below) |
+| Total CI test runs analyzed | **100** test runs from 64 workflow runs | Live: 54 demo test runs + 46 imported from 46 public workflow runs (sampled, below) |
+| Total test results analyzed (individual test executions) | **111,660** | Live demo: 1,800; apache/druid: 75,973 (sampled 1 in 120); home-assistant/core: 33,887 (sampled 1 in 40) |
 
 Imported history is **sampled**: a stable 1-in-N subset of each suite's tests (the same tests in every run), because one full run of either suite is bigger than the 100k-results-per-repo budget. Full-suite sizes are estimates (sampled count × N).
 
-| Repo | Workflow runs | Sampling | Tests analyzed (sampled) | Results analyzed (sampled) | ≈ Full suite |
-|---|---|---|---|---|---|
-| apache/druid | 30 | 1 in 120 tests | 2,533 | 75,973 | ≈ 303,960 tests, ≈ 303,892 results/run, ≈ 9,116,760 results |
-| home-assistant/core | 16 | 1 in 40 tests | 2,627 | 33,887 | ≈ 105,080 tests, ≈ 84,718 results/run, ≈ 1,355,480 results |
+| Repo | Workflow runs | Sampling | Tests analyzed (sampled) | Results analyzed (sampled) | ≈ Full suite | Flagged flaky (unverified) |
+|---|---|---|---|---|---|---|
+| apache/druid | 30 | 1 in 120 tests | 2,533 | 75,973 | ≈ 303,960 tests, ≈ 303,892 results/run, ≈ 9,116,760 results | 0 |
+| home-assistant/core | 16 | 1 in 40 tests | 2,627 | 33,887 | ≈ 105,080 tests, ≈ 84,718 results/run, ≈ 1,355,480 results | 0 |
 
-<sub>Measured 2026-10-28 20:46 UTC from the project database (`flakydetect metrics`); raw numbers in `docs/metrics.json`.</sub>
+Top candidates by score in imported history. These are **unverified**: the scorer flagged or scored them, but nobody has confirmed they are flaky.
+- apache/druid: none: every sampled test scored 0
+- home-assistant/core: none: every sampled test scored 0
+
+<sub>Measured 2026-10-28 21:08 UTC from the project database (`flakydetect metrics`); raw numbers in `docs/metrics.json`.</sub>
 <!-- metrics:end -->
 
 How to read these numbers:
@@ -49,13 +57,19 @@ How to read these numbers:
   finished, every failure in it was already explained as flaky: the same test had passed
   on the same commit, or had earlier flaky evidence. The PR comment says so, and the
   `fail-on-real-failures` gate stays green, so nobody needs to click "Re-run".
-- **Sample size:** 13 demo workflow runs is a small sample. These results show the
+- **Sample size:** 18 demo workflow runs is a small sample. These results show the
   pipeline working end to end, not a benchmark.
-- **History:** the imported history found **0** flaky tests in about 5,160 sampled tests.
-  That's expected, because those projects run each commit once on their default branch,
-  so there is no same-commit evidence. See [docs/history.md](docs/history.md), which also
-  lists the measured full-suite sizes: 310,314 results in one apache/druid run and
-  105,256 in one home-assistant/core run.
+- **Refreshing:** every nightly run posts fresh numbers as annotations on its
+  "Measure README metrics" step. To update the README, save that JSON as
+  `docs/metrics.json` and regenerate the block between the `metrics` markers with
+  `flakydetect.metrics.readme_block`. `tests/test_readme.py` fails if the two disagree.
+- **History:** the scorer flagged **0** tests as flaky in either imported repo, and every
+  sampled test scored exactly 0, so there are no candidates to list. That's expected:
+  those projects run each commit once on their default branch, so there is no same-commit
+  pass-and-fail evidence, and no reruns were recorded for the sampled tests. Any future
+  history candidate should be treated as **unverified** until someone confirms it. See
+  [docs/history.md](docs/history.md), which also lists the measured full-suite sizes:
+  310,314 results in one apache/druid run and 105,256 in one home-assistant/core run.
 
 ## One hard decision: warn, open an issue, or quarantine automatically?
 
@@ -165,7 +179,8 @@ quarantine in `auto` mode. It's optional; any JUnit XML works.
 
 ### 4. Nightly report (optional)
 
-Enable **Settings → Pages → Source: GitHub Actions**.
+Enable **Settings → Pages → Source: GitHub Actions**. This repo's report is live at
+<https://manaswichowdary.github.io/flaky-test-detector/>.
 [`nightly.yml`](.github/workflows/nightly.yml) rescores every repo and publishes the report
 from `main` each night. It also keeps the report as a workflow artifact.
 
