@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import config, db, ghenv, junit, scorer
+from . import config, db, ghenv, junit, notifier, scorer
 from .collector import RunMeta, ingest
+from .github_api import GitHubClient, GitHubError, MissingTokenError
 from .identity import make_resolver
 
 
@@ -52,6 +53,31 @@ def cmd_score(args, settings) -> int:
     return 0
 
 
+def cmd_notify(args, settings) -> int:
+    gh = ghenv.run_metadata()
+    repo, sha = args.repo or gh["repo"], args.sha or gh["sha"]
+    pr = args.pr or gh["pr_number"]
+    if not (repo and sha):
+        print("error: --repo and --sha are required outside GitHub Actions", file=sys.stderr)
+        return 2
+    engine = _engine(settings, args.require_persistent_db)
+    out = notifier.notify(engine, GitHubClient(), settings, repo, sha, pr)
+    flaky = sum(v.flaky for v in out.verdicts)
+    print(f"{len(out.verdicts)} failing tests ({flaky} flaky); "
+          f"issues opened: {len(out.issues_opened)}; comment: {out.comment_id or 'none'}")
+    return 0
+
+
+def cmd_quarantine_list(args, settings) -> int:
+    repo = args.repo or ghenv.run_metadata()["repo"]
+    if settings.mode != "auto":
+        return 0  # only auto mode skips tests
+    engine = _engine(settings, args.require_persistent_db)
+    for test_id in notifier.quarantined_tests(engine, repo):
+        print(test_id)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="flakydetect", description=__doc__)
     parser.add_argument("--config", help="path to flakydetect.toml")
@@ -75,6 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo")
     p.add_argument("--top", type=int, default=20)
     p.set_defaults(func=cmd_score)
+
+    p = sub.add_parser("notify", help="comment on the PR and open quarantine issues")
+    p.add_argument("--repo")
+    p.add_argument("--sha")
+    p.add_argument("--pr", type=int)
+    p.set_defaults(func=cmd_notify)
+
+    p = sub.add_parser("quarantine-list", help="print quarantined test ids (auto mode only)")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_quarantine_list)
     return parser
 
 
@@ -87,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = config.load(args.config)
         return args.func(args, settings)
-    except (config.ConfigError, junit.JUnitParseError) as exc:
+    except (config.ConfigError, junit.JUnitParseError, MissingTokenError, GitHubError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

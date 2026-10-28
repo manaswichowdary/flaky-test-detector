@@ -86,6 +86,7 @@ quarantine_issues = Table(
     Column("test_pk", Integer, ForeignKey("tests.id", ondelete="CASCADE"), primary_key=True),
     Column("issue_number", Integer, nullable=False),
     Column("issue_url", String(500), nullable=False),
+    Column("state", String(10), nullable=False, default="open"),
     Column("failure_at", DateTime),
     Column("created_at", DateTime, nullable=False),
 )
