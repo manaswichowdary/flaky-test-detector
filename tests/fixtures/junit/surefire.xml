@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="org.example.CacheTest" tests="3" failures="1" time="1.2">
+  <testcase name="evictsOldest" classname="org.example.CacheTest" time="0.3">
+    <flakyFailure message="expected 1 but was 2" type="java.lang.AssertionError"/>
+  </testcase>
+  <testcase name="loadsLazily" classname="org.example.CacheTest" time="0.2">
+    <failure message="NPE"/>
+    <rerunFailure message="NPE"/>
+    <rerunFailure message="NPE"/>
+  </testcase>
+  <testcase name="stable" classname="org.example.CacheTest" time="0.1"/>
+</testsuite>

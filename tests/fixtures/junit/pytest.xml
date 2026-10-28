@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" errors="1" failures="1" skipped="1" tests="4" time="0.5">
+  <testcase classname="demo.tests.test_cart" name="test_cart_sums_quantities" file="demo/tests/test_cart.py" line="10" time="0.001">
+    <properties><property name="fingerprint" value="abc123"/></properties>
+  </testcase>
+  <testcase classname="demo.tests.test_cart" name="test_book_full_price" time="0.002">
+    <failure message="assert 15.0 == 20.0">traceback here</failure>
+  </testcase>
+  <testcase classname="demo.tests.test_net" name="test_slow" time="0.4"><error message="timeout"/></testcase>
+  <testcase classname="demo.tests.test_net" name="test_skip" time="0"><skipped message="no network"/></testcase>
+</testsuite></testsuites>

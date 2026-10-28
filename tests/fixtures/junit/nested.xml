@@ -1,0 +1,6 @@
+<testsuites>
+  <testsuite name="outer">
+    <testsuite name="inner"><testcase classname="pkg.A" name="t1" time="1.5"/></testsuite>
+    <testcase classname="pkg.B" name="t2" time="bogus"/>
+  </testsuite>
+</testsuites>
