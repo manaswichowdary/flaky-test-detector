@@ -1,0 +1,55 @@
+{
+  "demo_repo": "manaswichowdary/flaky-test-detector",
+  "demo_test_runs": 39,
+  "demo_workflow_runs": 13,
+  "failed_workflow_runs": 13,
+  "false_alarms": [],
+  "generated_at": "2026-10-28 20:46 UTC",
+  "history": [
+    {
+      "repo": "apache/druid",
+      "sample_one_in": 120,
+      "sampled_results": 75973,
+      "sampled_tests": 2533,
+      "test_runs": 30,
+      "workflow_runs": 30
+    },
+    {
+      "repo": "home-assistant/core",
+      "sample_one_in": 40,
+      "sampled_results": 33887,
+      "sampled_tests": 2627,
+      "test_runs": 16,
+      "workflow_runs": 16
+    }
+  ],
+  "max_minutes": 0.7,
+  "median_minutes": 0.3,
+  "planted_found": [
+    "test_async::test_concurrent_increments",
+    "test_cart::test_book_full_price",
+    "test_network::test_slow_endpoint_within_timeout",
+    "test_registry::test_lookup_csv_plugin",
+    "test_text::test_slugify_random_title_is_nonempty",
+    "test_timing::test_warm_cache_is_fast"
+  ],
+  "planted_missed": [],
+  "planted_total": 6,
+  "real_failure_runs": 0,
+  "repos": {
+    "apache/druid": 30,
+    "home-assistant/core": 16,
+    "manaswichowdary/flaky-test-detector": 13
+  },
+  "reruns_avoided": 13,
+  "test_runs": 85,
+  "time_to_issue_minutes": [
+    0.1,
+    0.2,
+    0.2,
+    0.5,
+    0.5,
+    0.7
+  ],
+  "workflow_runs": 59
+}

@@ -19,12 +19,43 @@ quarantine issue so someone fixes the root cause.
 ## Measured results
 
 <!-- metrics:start -->
-_Filled in from the project database by `flakydetect metrics`._
+| Metric | Result | Source |
+|---|---|---|
+| Planted flaky tests found | **6 of 6** | Live: `demo.yml` runs on GitHub (13 workflow runs, 39 test runs) |
+| False alarms | **0** | Live: `demo.yml` runs on GitHub (13 workflow runs, 39 test runs) |
+| Reruns avoided on the demo repo | **13 of 13** failed CI runs had only flaky failures | Live: `demo.yml` runs on GitHub (13 workflow runs, 39 test runs) |
+| Time from a flaky failure to a quarantine issue | **median 0.3 min, max 0.7 min (6 issues)** | Live: failing run's completion time to the GitHub issue's `created_at` |
+| Total CI test runs analyzed | **85** test runs from 59 workflow runs | Live: 39 demo test runs + 46 imported from 46 public workflow runs (sampled, below) |
+
+Imported history is **sampled**: a stable 1-in-N subset of each suite's tests (the same tests in every run), because one full run of either suite is bigger than the 100k-results-per-repo budget. Full-suite sizes are estimates (sampled count × N).
+
+| Repo | Workflow runs | Sampling | Tests analyzed (sampled) | Results analyzed (sampled) | ≈ Full suite |
+|---|---|---|---|---|---|
+| apache/druid | 30 | 1 in 120 tests | 2,533 | 75,973 | ≈ 303,960 tests, ≈ 303,892 results/run, ≈ 9,116,760 results |
+| home-assistant/core | 16 | 1 in 40 tests | 2,627 | 33,887 | ≈ 105,080 tests, ≈ 84,718 results/run, ≈ 1,355,480 results |
+
+<sub>Measured 2026-10-28 20:46 UTC from the project database (`flakydetect metrics`); raw numbers in `docs/metrics.json`.</sub>
 <!-- metrics:end -->
 
-The demo repo is this one: [`demo/tests`](demo/tests) has 30 tests, 6 of them flaky on
-purpose, run 3× per commit by [`demo.yml`](.github/workflows/demo.yml). History comes from
-two public projects that publish JUnit reports; see [docs/history.md](docs/history.md).
+How to read these numbers:
+
+- **Live data:** every number above comes from the database that the GitHub Action fills
+  during real `demo.yml` runs on this repo, plus the imported history. Run
+  `flakydetect metrics --repo manaswichowdary/flaky-test-detector` against the same
+  database to reproduce it.
+- **The demo:** [`demo/tests`](demo/tests) has 30 tests, 6 of them flaky on purpose, and
+  `demo.yml` runs it 3× per commit.
+- **Reruns avoided:** a failed CI run counts as avoided when, by the time the run
+  finished, every failure in it was already explained as flaky: the same test had passed
+  on the same commit, or had earlier flaky evidence. The PR comment says so, and the
+  `fail-on-real-failures` gate stays green, so nobody needs to click "Re-run".
+- **Sample size:** 13 demo workflow runs is a small sample. These results show the
+  pipeline working end to end, not a benchmark.
+- **History:** the imported history found **0** flaky tests in about 5,160 sampled tests.
+  That's expected, because those projects run each commit once on their default branch,
+  so there is no same-commit evidence. See [docs/history.md](docs/history.md), which also
+  lists the measured full-suite sizes: 310,314 results in one apache/druid run and
+  105,256 in one home-assistant/core run.
 
 ## One hard decision: warn, open an issue, or quarantine automatically?
 
