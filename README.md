@@ -24,12 +24,12 @@ Live report of the flakiest tests, rebuilt nightly:
 <!-- metrics:start -->
 | Metric | Result | Source |
 |---|---|---|
-| Planted flaky tests found | **6 of 6** | Live: `demo.yml` runs on GitHub (18 workflow runs, 54 test runs) |
-| False alarms | **0** | Live: `demo.yml` runs on GitHub (18 workflow runs, 54 test runs) |
-| Reruns avoided on the demo repo | **18 of 18** failed CI runs had only flaky failures | Live: `demo.yml` runs on GitHub (18 workflow runs, 54 test runs) |
-| Time from a flaky failure to a quarantine issue | **median 0.3 min, max 0.7 min (6 issues)** | Live: failing run's completion time to the GitHub issue's `created_at` |
-| Total CI test runs analyzed | **100** test runs from 64 workflow runs | Live: 54 demo test runs + 46 imported from 46 public workflow runs (sampled, below) |
-| Total test results analyzed (individual test executions) | **111,660** | Live demo: 1,800; apache/druid: 75,973 (sampled 1 in 120); home-assistant/core: 33,887 (sampled 1 in 40) |
+| Planted flaky tests found | **6 of 6** | Live: `demo.yml` runs on GitHub (28 workflow runs, 84 test runs) |
+| False alarms | **0** | Live: `demo.yml` runs on GitHub (28 workflow runs, 84 test runs) |
+| Reruns avoided on the demo repo | **28 of 28** failed CI runs had only flaky failures | Live: `demo.yml` runs on GitHub (28 workflow runs, 84 test runs) |
+| Time from a flaky failure to a quarantine issue | **median 0.6 min, max 0.7 min (6 issues)** | Live: completion of the workflow run that opened the issue to the GitHub issue's `created_at` |
+| Total CI test runs analyzed | **130** test runs from 74 workflow runs | Live: 84 demo test runs + 46 imported from 46 public workflow runs (sampled, below) |
+| Total test results analyzed (individual test executions) | **112,860** | Live demo: 3,000; apache/druid: 75,973 (sampled 1 in 120); home-assistant/core: 33,887 (sampled 1 in 40) |
 
 Imported history is **sampled**: a stable 1-in-N subset of each suite's tests (the same tests in every run), because one full run of either suite is bigger than the 100k-results-per-repo budget. Full-suite sizes are estimates (sampled count × N).
 
@@ -42,7 +42,7 @@ Top candidates by score in imported history. These are **unverified**: the score
 - apache/druid: none: every sampled test scored 0
 - home-assistant/core: none: every sampled test scored 0
 
-<sub>Measured 2026-10-28 21:08 UTC from the project database (`flakydetect metrics`); raw numbers in `docs/metrics.json`.</sub>
+<sub>Measured 2026-10-28 21:51 UTC from the project database (`flakydetect metrics`); raw numbers in `docs/metrics.json`.</sub>
 <!-- metrics:end -->
 
 How to read these numbers:
