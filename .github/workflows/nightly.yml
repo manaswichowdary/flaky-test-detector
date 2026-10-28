@@ -35,6 +35,10 @@ jobs:
         env:
           FLAKY_DATABASE_URL: ${{ secrets.FLAKY_DATABASE_URL }}
         run: flakydetect --require-persistent-db report --rescore --out report
+      - name: Measure README metrics
+        env:
+          FLAKY_DATABASE_URL: ${{ secrets.FLAKY_DATABASE_URL }}
+        run: flakydetect --require-persistent-db metrics --json report/metrics.json
       - uses: actions/upload-pages-artifact@v4
         with:
           path: report

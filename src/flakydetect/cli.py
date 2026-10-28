@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from . import config, db, ghenv, history, junit, notifier, output, report, scorer
+from . import config, db, ghenv, history, junit, metrics, notifier, output, report, scorer
 from .collector import RunMeta, ingest
 from .github_api import GitHubClient, GitHubError, MissingTokenError
 from .identity import make_resolver
@@ -156,6 +157,27 @@ def cmd_report(args, settings) -> int:
     return 0
 
 
+def _load_planted() -> dict[str, str]:
+    """Ground truth from the demo suite's `# PLANTED-FLAKY` markers (repo checkout only)."""
+    sys.path.insert(0, ".")
+    from demo.planted import planted  # noqa: PLC0415
+    return planted()
+
+
+def cmd_metrics(args, settings) -> int:
+    repo = args.repo or ghenv.run_metadata()["repo"]
+    if not repo:
+        output.error("--repo is required outside GitHub Actions")
+        return 2
+    engine = _engine(settings, args.require_persistent_db)
+    m = metrics.compute(engine, repo, _load_planted())
+    if args.json:
+        Path(args.json).write_text(m.to_json() + "\n")
+    output.result("metrics", m.markdown())
+    output.result("metrics json", m.to_json())
+    return 0
+
+
 def cmd_db_size(args, settings) -> int:
     engine = _engine(settings, args.require_persistent_db)
     output.result("db-size", f"database {db.database_size_mb(engine):.1f} MB")
@@ -210,6 +232,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=200)
     p.add_argument("--rescore", action="store_true", help="recompute scores for every repo first")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("metrics", help="compute the README numbers for the demo repo")
+    p.add_argument("--repo")
+    p.add_argument("--json", help="also write the raw numbers to this file")
+    p.set_defaults(func=cmd_metrics)
 
     p = sub.add_parser("db-size", help="print the database size in MB")
     p.set_defaults(func=cmd_db_size)
