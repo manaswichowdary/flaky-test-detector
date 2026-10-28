@@ -22,6 +22,8 @@ class JUnitParseError(ValueError):
 
 @dataclass
 class TestResult:
+    __test__ = False  # not a pytest test class
+
     test_id: str
     classname: str
     name: str
@@ -78,7 +80,7 @@ def _parse_case(case: Element) -> TestResult:
     )
 
 
-def _merge_attempts(results: list[TestResult]) -> list[TestResult]:
+def merge_attempts(results: list[TestResult]) -> list[TestResult]:
     """Repeated testcases with the same id (e.g. pytest-rerunfailures) become one result:
     the last attempt is the outcome, earlier failed attempts count as rerun failures."""
     merged: dict[str, TestResult] = {}
@@ -101,7 +103,7 @@ def parse_string(xml: str | bytes) -> list[TestResult]:
     if root.tag not in ("testsuites", "testsuite"):
         raise JUnitParseError(f"unexpected root element <{root.tag}>")
     cases = [_parse_case(c) for c in root.iter("testcase")]
-    return _merge_attempts(cases)
+    return merge_attempts(cases)
 
 
 def parse_file(path: str | Path) -> list[TestResult]:
