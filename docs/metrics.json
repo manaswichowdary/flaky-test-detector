@@ -1,11 +1,11 @@
 {
   "demo_repo": "manaswichowdary/flaky-test-detector",
-  "demo_results": 1800,
-  "demo_test_runs": 54,
-  "demo_workflow_runs": 18,
-  "failed_workflow_runs": 18,
+  "demo_results": 3000,
+  "demo_test_runs": 84,
+  "demo_workflow_runs": 28,
+  "failed_workflow_runs": 28,
   "false_alarms": [],
-  "generated_at": "2026-10-28 21:08 UTC",
+  "generated_at": "2026-10-28 21:51 UTC",
   "history": [
     {
       "flagged": 0,
@@ -29,7 +29,7 @@
     }
   ],
   "max_minutes": 0.7,
-  "median_minutes": 0.3,
+  "median_minutes": 0.6,
   "planted_found": [
     "test_async::test_concurrent_increments",
     "test_cart::test_book_full_price",
@@ -44,18 +44,18 @@
   "repos": {
     "apache/druid": 30,
     "home-assistant/core": 16,
-    "manaswichowdary/flaky-test-detector": 18
+    "manaswichowdary/flaky-test-detector": 28
   },
-  "reruns_avoided": 18,
-  "test_runs": 100,
+  "reruns_avoided": 28,
+  "test_runs": 130,
   "time_to_issue_minutes": [
-    0.1,
-    0.2,
-    0.2,
+    0.4,
     0.5,
-    0.5,
+    0.6,
+    0.6,
+    0.7,
     0.7
   ],
-  "total_results": 111660,
-  "workflow_runs": 64
+  "total_results": 112860,
+  "workflow_runs": 74
 }

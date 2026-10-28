@@ -63,6 +63,24 @@ def test_metrics_known_numbers(engine):
     assert m.demo_results == 15 and m.total_results == 15 + 4
 
 
+def test_time_to_issue_measured_from_opening_run(engine):
+    # t1 failed hours before the issue existed (e.g. history from before the repo was recreated);
+    # the issue was opened by run 900's notify step, one minute after that run completed.
+    shard(engine, "800-demo-1", "s8", 0, [r("test_a::t1", FAILED)])
+    shard(engine, "800-demo-2", "s8", 1, [r("test_a::t1", PASSED)])
+    shard(engine, "900-demo-1", "s9", 300, [r("test_a::t1", FAILED)])
+    shard(engine, "900-demo-2", "s9", 302, [r("test_a::t1", PASSED)])
+    # A later run that fails t1 again does not count: it completed after the issue was created.
+    shard(engine, "950-demo-1", "s10", 400, [r("test_a::t1", FAILED)])
+    with engine.begin() as conn:
+        pk = conn.execute(select(db.tests.c.id).where(db.tests.c.test_id == "demo.tests.test_a::t1")).scalar_one()
+        conn.execute(insert(db.quarantine_issues).values(
+            test_pk=pk, issue_number=3, issue_url="u", state="open",
+            created_at=T0 + timedelta(minutes=303)))
+    m = metrics.compute(engine, DEMO, PLANTED)
+    assert m.time_to_issue_minutes == [1.0] and m.median_minutes == 1.0
+
+
 def test_history_sampling_reported(engine):
     seed(engine)
     m = metrics.compute(engine, DEMO, PLANTED, sample={"up/stream": 40})

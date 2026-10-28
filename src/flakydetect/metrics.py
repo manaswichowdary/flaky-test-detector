@@ -111,8 +111,8 @@ class Metrics:
             f"| False alarms | **{len(self.false_alarms)}** | {live} |",
             f"| Reruns avoided on the demo repo | **{self.reruns_avoided} of {self.failed_workflow_runs}** "
             f"failed CI runs had only flaky failures | {live} |",
-            f"| Time from a flaky failure to a quarantine issue | **{tti}** | Live: failing run's completion "
-            f"time to the GitHub issue's `created_at` |",
+            f"| Time from a flaky failure to a quarantine issue | **{tti}** | Live: completion of the workflow "
+            f"run that opened the issue to the GitHub issue's `created_at` |",
             f"| Total CI test runs analyzed | **{self.test_runs:,}** test runs from {self.workflow_runs:,} "
             f"workflow runs | Live: {self.demo_test_runs:,} demo test runs + {hist_test_runs:,} imported "
             f"from {hist_runs:,} public workflow runs (sampled, below) |",
@@ -240,15 +240,20 @@ def compute(engine: Engine, demo_repo: str, planted: dict[str, str], demo_prefix
             else:
                 real += 1
 
-    # 3. Time from the test's first failure to its quarantine issue.
-    first_failure: dict[int, datetime] = {}
-    for r in results:
-        if r.status in BAD and (r.test_pk not in first_failure or r.completed_at < first_failure[r.test_pk]):
-            first_failure[r.test_pk] = r.completed_at
-    tti = sorted(
-        round((i.created_at - first_failure[i.test_pk]).total_seconds() / 60, 1)
-        for i in issues if i.test_pk in first_failure and i.created_at >= first_failure[i.test_pk]
-    )
+    # 3. Time from the completion of the workflow run that opened each issue to the issue's
+    #    created_at. Notify runs right after a workflow run's shards, so the opening run is the
+    #    latest one that failed the test and completed by the time the issue was created.
+    done = {key: max(r.completed_at for r in rows) for key, rows in by_wf.items()}
+    failed_in: dict[int, list[datetime]] = defaultdict(list)
+    for key, rows in by_wf.items():
+        for pk in {r.test_pk for r in rows if r.status in BAD}:
+            failed_in[pk].append(done[key])
+    tti = []
+    for i in issues:
+        opened_by = [t for t in failed_in.get(i.test_pk, []) if t <= i.created_at]
+        if opened_by:
+            tti.append(round((i.created_at - max(opened_by)).total_seconds() / 60, 1))
+    tti.sort()
 
     return Metrics(
         demo_repo=demo_repo,
