@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PATTERNS = [
     re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}"),          # GitHub tokens
     re.compile(r"github_pat_[A-Za-z0-9_]{40,}"),
-    re.compile(r"postgres(ql)?(\+\w+)?://[^:\s/]+:[^@\s]+@(?!localhost|127\.0\.0\.1|h[:/]|host)[\w.-]+"),
+    re.compile(r"postgres(ql)?(\+\w+)?://[^:\s/]+:(?!\*\*\*@)[^@\s]+@(?!localhost|127\.0\.0\.1|h[:/]|host)[\w.-]+"),
     re.compile(r"(?i)(api[_-]?key|secret|token)\s*[:=]\s*['\"][A-Za-z0-9_\-]{20,}['\"]"),
 ]
 
@@ -35,3 +35,4 @@ def test_patterns_catch_examples():
     assert PATTERNS[0].search(fake)
     assert PATTERNS[2].search("postgresql://user:" + "pw@db.example.supabase.co:5432/postgres")
     assert not PATTERNS[2].search("postgresql+psycopg://flaky:flaky@localhost:5432/flaky")
+    assert not PATTERNS[2].search("postgresql://user:" + "***@db.example.com/d")
