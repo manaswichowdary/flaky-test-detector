@@ -39,7 +39,10 @@ def seed(engine):
     shard(engine, "555/junit", "h1", 0, [r("test_x::y", PASSED), r("test_x::z", PASSED)],
           source="history", repo="up/stream")
     shard(engine, "556/junit", "h2", 5, [r("test_x::y", PASSED)], source="history", repo="up/stream")
+    # A rerun of the same history commit fails: test_x::y becomes a (unverified) candidate.
+    shard(engine, "557/junit", "h2", 6, [r("test_x::y", FAILED)], source="history", repo="up/stream")
     score_repo(engine, DEMO, Settings(), now=T0 + timedelta(hours=3))
+    score_repo(engine, "up/stream", Settings(), now=T0 + timedelta(hours=3))
     with engine.begin() as conn:
         pk = conn.execute(select(db.tests.c.id).where(db.tests.c.test_id == "demo.tests.test_a::t1")).scalar_one()
         conn.execute(insert(db.quarantine_issues).values(
@@ -54,22 +57,38 @@ def test_metrics_known_numbers(engine):
     assert m.false_alarms == ["demo.tests.test_b::t4"]
     assert (m.demo_workflow_runs, m.failed_workflow_runs, m.reruns_avoided, m.real_failure_runs) == (3, 3, 2, 1)
     assert m.time_to_issue_minutes == [30.0] and m.median_minutes == 30.0
-    assert (m.test_runs, m.workflow_runs) == (7, 5)
-    assert m.repos == {DEMO: 3, "up/stream": 2}
+    assert (m.test_runs, m.workflow_runs) == (8, 6)
+    assert m.repos == {DEMO: 3, "up/stream": 3}
     assert m.demo_test_runs == 5
+    assert m.demo_results == 15 and m.total_results == 15 + 4
 
 
 def test_history_sampling_reported(engine):
     seed(engine)
     m = metrics.compute(engine, DEMO, PLANTED, sample={"up/stream": 40})
     [h] = m.history
-    assert (h.repo, h.workflow_runs, h.test_runs, h.sample_one_in) == ("up/stream", 2, 2, 40)
-    assert (h.sampled_tests, h.sampled_results) == (2, 3)
-    assert h.approx_full_results == 120 and h.approx_full_results_per_run == 60
+    assert (h.repo, h.workflow_runs, h.test_runs, h.sample_one_in) == ("up/stream", 3, 3, 40)
+    assert (h.sampled_tests, h.sampled_results) == (2, 4)
+    assert h.approx_full_results == 160 and h.approx_full_results_per_run == 53
+    assert h.flagged == 1
+    assert h.top == [{"test_id": "demo.tests.test_x::y", "score": h.top[0]["score"], "flagged": True}]
+    assert 0 < h.top[0]["score"] <= 1
     md = m.markdown()
     assert "Imported history is **sampled**" in md
-    assert "| up/stream | 2 | 1 in 40 tests | 2 | 3 | ≈ 80 tests, ≈ 60 results/run, ≈ 120 results |" in md
-    assert "Live: 5 demo test runs + 2 imported from 2 public workflow runs" in md
+    assert "| up/stream | 3 | 1 in 40 tests | 2 | 4 | ≈ 80 tests, ≈ 53 results/run, ≈ 160 results | 1 |" in md
+    assert "Live: 5 demo test runs + 3 imported from 3 public workflow runs" in md
+    assert ("| Total test results analyzed (individual test executions) | **19** | "
+            "Live demo: 15; up/stream: 4 (sampled 1 in 40) |") in md
+    assert "**unverified**" in md
+    assert f"- up/stream: `demo.tests.test_x::y` ({h.top[0]['score']:.2f}, flagged)" in md
+
+
+def test_history_without_candidates_says_so(engine):
+    shard(engine, "1/junit", "h1", 0, [r("test_x::y", PASSED)], source="history", repo="up/stream")
+    score_repo(engine, "up/stream", Settings(), now=T0 + timedelta(hours=1))
+    m = metrics.compute(engine, DEMO, PLANTED, sample={"up/stream": 40})
+    assert m.history[0].flagged == 0 and m.history[0].top == []
+    assert "- up/stream: none: every sampled test scored 0" in m.markdown()
 
 
 def test_markdown_and_roundtrip(engine):

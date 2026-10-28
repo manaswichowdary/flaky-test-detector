@@ -9,6 +9,7 @@ on:
   push:
     paths:
       - src/flakydetect/report.py
+      - src/flakydetect/metrics.py
       - src/flakydetect/templates/**
       - .github/workflows/nightly.yml
 
