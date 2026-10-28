@@ -25,6 +25,7 @@ class Settings:
     min_score: float = 0.1
     window_days: int = 30
     half_life_days: float = 14.0
+    clear_after_clean_commits: int = 10
     # Quarantine mode (hard decision 2)
     mode: str = "issue"
     quarantine_file: str = "quarantine.txt"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import config, db, ghenv, junit
+from . import config, db, ghenv, junit, scorer
 from .collector import RunMeta, ingest
 from .identity import make_resolver
 
@@ -38,6 +38,20 @@ def cmd_ingest(args, settings) -> int:
     return 0
 
 
+def cmd_score(args, settings) -> int:
+    repo = args.repo or ghenv.run_metadata()["repo"]
+    if not repo:
+        print("error: --repo is required outside GitHub Actions", file=sys.stderr)
+        return 2
+    engine = _engine(settings, args.require_persistent_db)
+    scores = scorer.score_repo(engine, repo, settings)
+    flaky = sorted((s for s in scores if s.is_flaky), key=lambda s: -s.score)
+    print(f"scored {len(scores)} tests in {repo}: {len(flaky)} flaky")
+    for s in flaky[: args.top]:
+        print(f"  {s.score:5.2f}  mixed={s.mixed_commits} reruns={s.rerun_passes}  {s.test_id}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="flakydetect", description=__doc__)
     parser.add_argument("--config", help="path to flakydetect.toml")
@@ -56,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workflow")
     p.add_argument("--source", default="ci")
     p.set_defaults(func=cmd_ingest)
+
+    p = sub.add_parser("score", help="recompute flakiness scores for a repo")
+    p.add_argument("--repo")
+    p.add_argument("--top", type=int, default=20)
+    p.set_defaults(func=cmd_score)
     return parser
 
 
