@@ -1,0 +1,25 @@
+# Public repositories whose CI uploads JUnit XML as GitHub Actions artifacts.
+# `flakydetect discover-history` checks every candidate; `import-history` imports `repos`.
+# Run by .github/workflows/history.yml on push to this file, or manually.
+
+[history]
+candidates = [
+    "home-assistant/core",
+    "apache/kafka",
+    "apache/pulsar",
+    "apache/arrow",
+    "apache/druid",
+    "apache/shardingsphere",
+    "EnricoMi/publish-unit-test-result-action",
+    "testcontainers/testcontainers-java",
+    "getsentry/sentry",
+    "python/mypy",
+    "grafana/k6",
+    "spring-projects/spring-framework",
+]
+repos = []              # the 2 chosen repos, filled in after discovery
+max_runs = 30           # workflow runs per repo (newest first, default branch)
+sample_runs = 25        # runs checked per candidate during discovery
+artifact_pattern = "(?i)(junit|test-?results?|test-?reports?|surefire)"
+max_artifact_mb = 200
+max_results_per_repo = 300000   # keeps the Supabase free tier (500 MB) safe

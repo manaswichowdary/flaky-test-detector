@@ -1,0 +1,49 @@
+name: Import test history
+
+# Pulls JUnit artifacts from the public repos listed in history.toml into the
+# persistent database. Runs when the import config or code changes, or manually.
+on:
+  push:
+    paths:
+      - history.toml
+      - src/flakydetect/history.py
+      - .github/workflows/history.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: history-import
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Check candidate repos for JUnit artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.HISTORY_TOKEN || secrets.GITHUB_TOKEN }}
+        run: flakydetect discover-history
+
+  import:
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Import selected repos and score them
+        env:
+          GITHUB_TOKEN: ${{ secrets.HISTORY_TOKEN || secrets.GITHUB_TOKEN }}
+          FLAKY_DATABASE_URL: ${{ secrets.FLAKY_DATABASE_URL }}
+        run: flakydetect --require-persistent-db import-history

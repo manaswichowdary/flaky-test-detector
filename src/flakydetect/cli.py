@@ -7,7 +7,7 @@ import sys
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from . import config, db, ghenv, junit, notifier, output, scorer
+from . import config, db, ghenv, history, junit, notifier, output, scorer
 from .collector import RunMeta, ingest
 from .github_api import GitHubClient, GitHubError, MissingTokenError
 from .identity import make_resolver
@@ -85,6 +85,40 @@ def cmd_quarantine_list(args, settings) -> int:
     return 0
 
 
+def cmd_discover_history(args, settings) -> int:
+    cfg = history.load_config(args.history_config)
+    repos = args.repos or cfg.candidates
+    if not repos:
+        output.error("no candidate repos (pass them or set candidates in history.toml)")
+        return 2
+    client = GitHubClient()
+    for repo in repos:
+        output.result("discover-history", history.discover(
+            client, repo, cfg.artifact_pattern, cfg.sample_runs).summary())
+    return 0
+
+
+def cmd_import_history(args, settings) -> int:
+    cfg = history.load_config(args.history_config)
+    if args.max_runs:
+        cfg.max_runs = args.max_runs
+    repos = args.repos or cfg.repos
+    if not repos:
+        output.result("import-history", "no repos selected in history.toml; nothing to import")
+        return 0
+    client = GitHubClient()
+    engine = _engine(settings, args.require_persistent_db)
+    for repo in repos:
+        res = history.import_repo(engine, client, repo, cfg)
+        scores = scorer.score_repo(engine, repo, settings)
+        flaky = sorted((s for s in scores if s.is_flaky), key=lambda s: -s.score)
+        lines = [res.summary(), f"{repo}: {len(scores)} tests scored, {len(flaky)} flaky"]
+        lines += [f"  {s.score:.2f} {s.test_id}" for s in flaky[:10]]
+        lines += [f"  warning: {e}" for e in res.errors[:5]]
+        output.result("import-history", "\n".join(lines))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="flakydetect", description=__doc__)
     parser.add_argument("--config", help="path to flakydetect.toml")
@@ -114,6 +148,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sha")
     p.add_argument("--pr", type=int)
     p.set_defaults(func=cmd_notify)
+
+    p = sub.add_parser("discover-history", help="find which public repos publish JUnit artifacts")
+    p.add_argument("repos", nargs="*")
+    p.add_argument("--history-config", default="history.toml")
+    p.set_defaults(func=cmd_discover_history)
+
+    p = sub.add_parser("import-history", help="import JUnit artifacts from public repos")
+    p.add_argument("repos", nargs="*")
+    p.add_argument("--history-config", default="history.toml")
+    p.add_argument("--max-runs", type=int)
+    p.set_defaults(func=cmd_import_history)
 
     p = sub.add_parser("quarantine-list", help="print quarantined test ids (auto mode only)")
     p.add_argument("--repo")
