@@ -163,6 +163,7 @@ def test_repo_history_toml_is_valid():
     assert cfg.max_results_per_repo == 100_000 and cfg.max_db_mb == 300
     assert cfg.pattern_for("home-assistant/core") == "^test-results-full-"
     assert cfg.pattern_for("other/repo") == cfg.artifact_pattern
+    assert cfg.repo_sample == {"home-assistant/core": 40, "apache/druid": 120}
 
 
 def test_import_history_cli_noop_without_repos(tmp_path, monkeypatch, capsys):
@@ -277,3 +278,25 @@ def test_db_size_cli(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FLAKY_DATABASE_URL", f"sqlite:///{tmp_path / 'f.db'}")
     assert cli.main(["db-size"]) == 0
     assert "database" in capsys.readouterr().out
+
+
+@responses.activate
+def test_sampling_keeps_same_tests_every_run(engine, client):
+    from flakydetect.history import in_sample
+    many = "".join(f'<testcase classname="pkg.S" name="t{i}"/>' for i in range(400))
+    xml = f"<testsuite>{many}</testsuite>".encode()
+    mock_repo([run(1), run(2)], [art(20, 2), art(10, 1)],
+              {20: make_zip({"r.xml": xml}), 10: make_zip({"r.xml": xml})})
+    cfg = HistoryConfig(repo_sample={REPO: 10})
+    out = import_repo(engine, client, REPO, cfg)
+    # Sampled on the raw id, so a test is kept or dropped consistently across environments.
+    kept = [i for i in range(400) if in_sample(f"pkg.S::t{i}", 10)]
+    assert 20 < len(kept) < 70  # roughly 1 in 10
+    assert out.results == 2 * len(kept) and out.sample == 10
+    assert "1 in 10 tests sampled" in out.summary()
+
+
+def test_in_sample_is_stable():
+    from flakydetect.history import in_sample
+    assert in_sample("x", 1)
+    assert [in_sample(f"t{i}", 7) for i in range(50)] == [in_sample(f"t{i}", 7) for i in range(50)]

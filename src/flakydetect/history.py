@@ -12,6 +12,7 @@ import io
 import re
 import tomllib
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +37,9 @@ class HistoryConfig:
     max_results_per_repo: int = 100_000
     max_db_mb: float = 300.0     # stop importing once the database is this big
     repo_patterns: dict[str, str] = field(default_factory=dict)  # per-repo artifact_pattern
+    # Keep 1 in N tests (stable hash of the test id) for suites too big for the row budget.
+    # The same tests are kept in every run, so each sampled test has its full history.
+    repo_sample: dict[str, int] = field(default_factory=dict)
 
     def pattern_for(self, repo: str) -> str:
         return self.repo_patterns.get(repo, self.artifact_pattern)
@@ -178,10 +182,12 @@ class ImportResult:
     results: int = 0
     artifacts_skipped: int = 0
     stopped: str | None = None   # why the import stopped early (row cap, DB size limit)
+    sample: int = 1              # 1 in N tests kept
     errors: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
-        text = (f"{self.repo}: imported {self.runs_imported} workflow runs "
+        sampled = f", 1 in {self.sample} tests sampled" if self.sample > 1 else ""
+        text = (f"{self.repo}: imported {self.runs_imported} workflow runs{sampled} "
                 f"({self.stored_runs} test runs, {self.results} test results); "
                 f"{self.runs_already} already stored, {self.artifacts_skipped} artifacts skipped")
         return text + (f"; stopped: {self.stopped}" if self.stopped else "")
@@ -189,6 +195,10 @@ class ImportResult:
 
 class DatabaseFull(RuntimeError):
     pass
+
+
+def in_sample(test_id: str, one_in: int) -> bool:
+    return one_in <= 1 or zlib.crc32(test_id.encode()) % one_in == 0
 
 
 def check_db_size(engine: Engine, limit_mb: float) -> float:
@@ -209,7 +219,7 @@ def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryCon
                 max_pages: int = 30) -> ImportResult:
     """Import the newest `cfg.max_runs` default-branch runs that have JUnit artifacts.
     All shards of one environment in a run are stored together as one test run."""
-    out = ImportResult(repo)
+    out = ImportResult(repo, sample=cfg.repo_sample.get(repo, 1))
     branch = default_branch(client, repo)
     runs, _ = junit_runs(client, repo, cfg.pattern_for(repo), branch, max_pages, cfg.max_runs)
     for run_id, arts in runs.items():
@@ -241,6 +251,8 @@ def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryCon
                 except (GitHubError, ValueError, zipfile.BadZipFile) as exc:
                     out.artifacts_skipped += 1
                     out.errors.append(f"{art['name']}: {exc}")
+            one_in = cfg.repo_sample.get(repo, 1)
+            results = [r for r in results if in_sample(r.test_id, one_in)]
             if not results:
                 continue
             if out.results + len(results) > cfg.max_results_per_repo:

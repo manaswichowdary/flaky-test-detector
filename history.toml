@@ -33,3 +33,10 @@ max_db_mb = 300                 # stop importing past this (Supabase free tier i
 # duplicate environments instead of more runs.
 "home-assistant/core" = "^test-results-full-"
 "apache/druid" = "^unit-test-reports-"
+
+[history.repo_sample]
+# One run of each suite is bigger than max_results_per_repo on its own (2026-10-28:
+# druid 310,314 results/run, home-assistant 105,256), so keep a stable 1-in-N sample of
+# tests. ~2.6k results/run each, ~80k for 30 runs.
+"home-assistant/core" = 40
+"apache/druid" = 120
