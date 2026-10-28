@@ -37,7 +37,9 @@ runs:
         python-version: ${{ inputs.python-version }}
     - name: Install flakydetect
       shell: bash
-      run: pip install --quiet "${{ github.action_path }}"
+      run: |
+        trap 'echo "::error title=flakydetect action::installing flakydetect failed (exit $?)"' ERR
+        pip install --quiet --disable-pip-version-check "${{ github.action_path }}"
     - name: Ingest test results
       if: inputs.command == 'ingest' || inputs.command == 'all'
       shell: bash
@@ -48,6 +50,7 @@ runs:
         JUNIT_PATH: ${{ inputs.junit-path }}
         SOURCE: ${{ inputs.source }}
       run: |
+        trap 'echo "::error title=flakydetect action::ingest step failed at: $BASH_COMMAND (exit $?)"' ERR
         if [ -z "$JUNIT_PATH" ]; then echo "::error::junit-path is required for ingest"; exit 2; fi
         # shellcheck disable=SC2086
         flakydetect --require-persistent-db ingest $JUNIT_PATH --run-id "$RUN_KEY" --source "$SOURCE"
@@ -59,5 +62,6 @@ runs:
         FLAKY_MODE: ${{ inputs.mode }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
+        trap 'echo "::error title=flakydetect action::notify step failed at: $BASH_COMMAND (exit $?)"' ERR
         flakydetect --require-persistent-db score
         flakydetect --require-persistent-db notify

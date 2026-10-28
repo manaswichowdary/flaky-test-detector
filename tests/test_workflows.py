@@ -16,10 +16,16 @@ def test_action_inputs_and_steps():
     action = load("action.yml")
     assert action["runs"]["using"] == "composite"
     assert action["inputs"]["database-url"]["required"] is True
+    cli_lines = [
+        line.strip()
+        for step in action["runs"]["steps"] if "run" in step
+        for line in step["run"].splitlines() if line.strip().startswith("flakydetect ")
+    ]
+    assert len(cli_lines) == 3
+    for line in cli_lines:
+        assert "--require-persistent-db" in line
     for step in action["runs"]["steps"]:
-        if "run" in step and "flakydetect" in step["run"]:
-            assert "--require-persistent-db" in step["run"]
-            assert "${{ inputs.database-url }}" not in step["run"]  # passed via env only
+        assert "${{ inputs.database-url }}" not in step.get("run", "")  # passed via env only
 
 
 def test_ci_never_runs_demo():

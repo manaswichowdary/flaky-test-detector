@@ -138,6 +138,12 @@ def main(argv: list[str] | None = None) -> int:
         detail = str(getattr(exc, "orig", None) or exc).strip().splitlines()
         output.error(f"database error ({type(exc).__name__}): {' '.join(detail[:3])}")
         return 2
+    except Exception as exc:  # noqa: BLE001  (surface anything else as a readable annotation)
+        import traceback
+        frame = traceback.extract_tb(exc.__traceback__)[-1]
+        output.error(f"unexpected {type(exc).__name__} at {frame.filename.rsplit('/', 1)[-1]}:"
+                     f"{frame.lineno}: {exc}")
+        return 1
 
 
 if __name__ == "__main__":

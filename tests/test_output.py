@@ -51,3 +51,17 @@ def test_quarantine_list_requires_db_even_in_issue_mode(tmp_path, monkeypatch, c
     monkeypatch.delenv("FLAKY_DATABASE_URL", raising=False)
     assert cli.main(["--require-persistent-db", "quarantine-list", "--repo", "o/r"]) == 2
     assert "FLAKY_DATABASE_URL is not set" in capsys.readouterr().err
+
+
+def test_unexpected_exception_becomes_annotation(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    def boom(args, settings):
+        raise KeyError("postgres://u:pw@h/d")
+
+    monkeypatch.setattr(cli, "cmd_score", boom)
+    assert cli.main(["score", "--repo", "o/r"]) == 1
+    out = capsys.readouterr().out
+    assert "::error title=flakydetect::unexpected KeyError at test_output.py:" in out
+    assert "pw@" not in out
