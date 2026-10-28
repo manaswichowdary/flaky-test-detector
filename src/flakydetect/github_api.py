@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterator
 
 import requests
 
 DEFAULT_API = "https://api.github.com"
+MAX_WAIT = 60  # seconds; longer rate-limit waits fail fast instead
 
 
 class MissingTokenError(RuntimeError):
@@ -61,9 +62,14 @@ class GitHubClient:
             if not retryable or attempt == self.max_retries:
                 break
             wait = resp.headers.get("Retry-After")
-            if wait is None and resp.headers.get("X-RateLimit-Reset"):
-                wait = max(int(resp.headers["X-RateLimit-Reset"]) - int(time.time()), 1)
-            self._sleep(min(float(wait or 2 ** attempt), 60))
+            if wait is None and resp.headers.get("X-RateLimit-Remaining") == "0":
+                reset = int(resp.headers.get("X-RateLimit-Reset", "0"))
+                wait = max(reset - int(time.time()), 1)
+                if wait > MAX_WAIT:
+                    # Primary limit exhausted: sleeping won't help for a long time, so stop.
+                    raise GitHubError(resp.status_code, "API rate limit exhausted; resets at "
+                                      + datetime.fromtimestamp(reset, timezone.utc).strftime("%H:%M UTC"))
+            self._sleep(min(float(wait or 2 ** attempt), MAX_WAIT))
         if resp.status_code >= 400:
             try:
                 message = resp.json().get("message", resp.text)
@@ -71,6 +77,12 @@ class GitHubClient:
                 message = resp.text
             raise GitHubError(resp.status_code, message[:300])
         return resp
+
+    def rate_limit(self) -> str:
+        """Remaining core API quota (this call doesn't count against it)."""
+        core = self.get("/rate_limit")["resources"]["core"]
+        reset = datetime.fromtimestamp(core["reset"], timezone.utc).strftime("%H:%M UTC")
+        return f"API quota {core['remaining']}/{core['limit']}, resets {reset}"
 
     def get(self, path: str, **params) -> Any:
         return self.request("GET", path, params=params or None).json()

@@ -96,6 +96,7 @@ def cmd_discover_history(args, settings) -> int:
         output.error("no candidate repos (pass them or set candidates in history.toml)")
         return 2
     client = GitHubClient()
+    output.result("discover-history", client.rate_limit())
     for repo in repos:
         output.result("discover-history", history.discover(
             client, repo, cfg.artifact_pattern, cfg.sample_pages).summary())
@@ -111,6 +112,7 @@ def cmd_import_history(args, settings) -> int:
         output.result("import-history", "no repos selected in history.toml; nothing to import")
         return 0
     client = GitHubClient()
+    output.result("import-history", client.rate_limit())
     engine = _engine(settings, args.require_persistent_db)
     for repo in repos:
         res = history.import_repo(engine, client, repo, cfg)

@@ -77,3 +77,30 @@ def test_create_issue_and_comment(client):
 def test_parse_time():
     assert parse_time("2026-01-02T03:04:05Z").isoformat() == "2026-01-02T03:04:05"
     assert parse_time(None) is None
+
+
+@responses.activate
+def test_exhausted_rate_limit_fails_fast(client):
+    import time as _time
+    reset = str(int(_time.time()) + 3600)
+    responses.get(f"{API}/repos/o/r/issues/1", status=403, json={"message": "API rate limit exceeded"},
+                  headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset})
+    with pytest.raises(GitHubError, match="rate limit exhausted; resets at"):
+        client.get_issue("o/r", 1)
+    assert len(responses.calls) == 1  # no sleeping and retrying for an hour
+
+
+@responses.activate
+def test_short_rate_limit_wait_is_retried(client):
+    import time as _time
+    reset = str(int(_time.time()) + 5)
+    responses.get(f"{API}/repos/o/r/issues/1", status=403, json={"message": "limit"},
+                  headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset})
+    responses.get(f"{API}/repos/o/r/issues/1", json={"state": "open"})
+    assert client.get_issue("o/r", 1)["state"] == "open"
+
+
+@responses.activate
+def test_rate_limit_summary(client):
+    responses.get(f"{API}/rate_limit", json={"resources": {"core": {"remaining": 990, "limit": 1000, "reset": 0}}})
+    assert client.rate_limit().startswith("API quota 990/1000, resets 00:00 UTC")
