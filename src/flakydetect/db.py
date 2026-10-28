@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    text, Boolean, Column, DateTime, Float, ForeignKey, Integer, MetaData, String, Table, Text,
+    text, select, Boolean, Column, DateTime, Float, ForeignKey, Integer, MetaData, String, Table, Text,
     UniqueConstraint, create_engine, event,
 )
 from sqlalchemy.engine import Engine
@@ -124,3 +124,7 @@ def database_size_mb(engine: Engine) -> float:
             pages = conn.execute(text("PRAGMA page_count")).scalar_one()
             size = pages * conn.execute(text("PRAGMA page_size")).scalar_one()
     return size / (1024 * 1024)
+
+
+def select_repos():
+    return select(tests.c.repo).distinct().order_by(tests.c.repo)

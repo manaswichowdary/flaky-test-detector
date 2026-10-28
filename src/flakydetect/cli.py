@@ -7,7 +7,7 @@ import sys
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from . import config, db, ghenv, history, junit, notifier, output, scorer
+from . import config, db, ghenv, history, junit, notifier, output, report, scorer
 from .collector import RunMeta, ingest
 from .github_api import GitHubClient, GitHubError, MissingTokenError
 from .identity import make_resolver
@@ -142,6 +142,20 @@ def cmd_import_history(args, settings) -> int:
     return 0
 
 
+def cmd_report(args, settings) -> int:
+    engine = _engine(settings, args.require_persistent_db)
+    if args.rescore:
+        with engine.connect() as conn:
+            repos = conn.execute(db.select_repos()).scalars().all()
+        for repo in repos:
+            scorer.score_repo(engine, repo, settings)
+    path, data = report.write(engine, args.out, args.limit)
+    flaky = sum(r.flaky for r in data.repos)
+    output.result("report", f"wrote {path}: {len(data.rows)} rows, {flaky} flaky tests, "
+                            f"{data.total_runs} runs across {len(data.repos)} repos")
+    return 0
+
+
 def cmd_db_size(args, settings) -> int:
     engine = _engine(settings, args.require_persistent_db)
     output.result("db-size", f"database {db.database_size_mb(engine):.1f} MB")
@@ -190,6 +204,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--history-config", default="history.toml")
     p.add_argument("--max-runs", type=int)
     p.set_defaults(func=cmd_import_history)
+
+    p = sub.add_parser("report", help="write the static HTML report of the flakiest tests")
+    p.add_argument("--out", default="report")
+    p.add_argument("--limit", type=int, default=200)
+    p.add_argument("--rescore", action="store_true", help="recompute scores for every repo first")
+    p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("db-size", help="print the database size in MB")
     p.set_defaults(func=cmd_db_size)

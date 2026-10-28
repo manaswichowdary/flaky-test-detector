@@ -37,7 +37,7 @@ def test_ci_never_runs_demo():
 
 
 def test_commenting_workflows_have_permissions():
-    for rel in [".github/workflows/demo.yml"]:
+    for rel in [".github/workflows/demo.yml", ".github/workflows/nightly.yml"]:
         assert load(rel)["permissions"] == WRITE_PERMS, rel
 
 
@@ -76,3 +76,14 @@ def test_push_and_pr_do_not_double_run():
         wf = load(rel)
         on = wf[True] if True in wf else wf["on"]
         assert on["push"]["branches"] == ["main"] and "pull_request" in on, rel
+
+
+def test_nightly_workflow():
+    wf = load(".github/workflows/nightly.yml")
+    on = wf[True] if True in wf else wf["on"]
+    assert on["schedule"][0]["cron"] and "workflow_dispatch" in on
+    deploy = wf["jobs"]["deploy"]
+    assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+    assert "refs/heads/main" in deploy["if"]
+    text = (ROOT / ".github/workflows/nightly.yml").read_text()
+    assert "--require-persistent-db report --rescore" in text
