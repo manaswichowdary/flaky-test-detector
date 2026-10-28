@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import config, db, ghenv, junit, notifier, scorer
+from sqlalchemy.exc import SQLAlchemyError
+
+from . import config, db, ghenv, junit, notifier, output, scorer
 from .collector import RunMeta, ingest
 from .github_api import GitHubClient, GitHubError, MissingTokenError
 from .identity import make_resolver
@@ -24,7 +26,7 @@ def cmd_ingest(args, settings) -> int:
     run_id = args.run_id or gh["run_id"]
     sha = args.sha or gh["sha"]
     if not (repo and run_id and sha):
-        print("error: --repo, --run-id and --sha are required outside GitHub Actions", file=sys.stderr)
+        output.error("--repo, --run-id and --sha are required outside GitHub Actions")
         return 2
     results = junit.parse_paths(args.paths)
     meta = RunMeta(
@@ -35,21 +37,22 @@ def cmd_ingest(args, settings) -> int:
     engine = _engine(settings, args.require_persistent_db)
     out = ingest(engine, repo, meta, results, resolver=make_resolver(settings))
     state = "already ingested" if out.duplicate else f"stored {out.inserted} results"
-    print(f"run {run_id} attempt {meta.run_attempt}: {state}")
+    output.result("ingest", f"run {run_id} attempt {meta.run_attempt}: {state}")
     return 0
 
 
 def cmd_score(args, settings) -> int:
     repo = args.repo or ghenv.run_metadata()["repo"]
     if not repo:
-        print("error: --repo is required outside GitHub Actions", file=sys.stderr)
+        output.error("--repo is required outside GitHub Actions")
         return 2
     engine = _engine(settings, args.require_persistent_db)
     scores = scorer.score_repo(engine, repo, settings)
     flaky = sorted((s for s in scores if s.is_flaky), key=lambda s: -s.score)
-    print(f"scored {len(scores)} tests in {repo}: {len(flaky)} flaky")
-    for s in flaky[: args.top]:
-        print(f"  {s.score:5.2f}  mixed={s.mixed_commits} reruns={s.rerun_passes}  {s.test_id}")
+    lines = [f"scored {len(scores)} tests in {repo}: {len(flaky)} flaky"]
+    lines += [f"  {s.score:5.2f}  mixed={s.mixed_commits} reruns={s.rerun_passes}  {s.test_id}"
+              for s in flaky[: args.top]]
+    output.result("score", "\n".join(lines))
     return 0
 
 
@@ -58,18 +61,22 @@ def cmd_notify(args, settings) -> int:
     repo, sha = args.repo or gh["repo"], args.sha or gh["sha"]
     pr = args.pr or gh["pr_number"]
     if not (repo and sha):
-        print("error: --repo and --sha are required outside GitHub Actions", file=sys.stderr)
+        output.error("--repo and --sha are required outside GitHub Actions")
         return 2
     engine = _engine(settings, args.require_persistent_db)
     out = notifier.notify(engine, GitHubClient(), settings, repo, sha, pr)
     flaky = sum(v.flaky for v in out.verdicts)
-    print(f"{len(out.verdicts)} failing tests ({flaky} flaky); "
-          f"issues opened: {len(out.issues_opened)}; comment: {out.comment_id or 'none'}")
+    lines = [f"{len(out.verdicts)} failing tests ({flaky} flaky); "
+             f"issues opened: {len(out.issues_opened)}; comment: {out.comment_id or 'none'}"]
+    lines += [f"  {'flaky' if v.flaky else 'real '}  {v.test_id}" for v in out.verdicts]
+    output.result("notify", "\n".join(lines))
     return 0
 
 
 def cmd_quarantine_list(args, settings) -> int:
     repo = args.repo or ghenv.run_metadata()["repo"]
+    if args.require_persistent_db:
+        config.require_persistent_db(settings)  # fail early even when the list is unused
     if settings.mode != "auto":
         return 0  # only auto mode skips tests
     engine = _engine(settings, args.require_persistent_db)
@@ -124,7 +131,12 @@ def main(argv: list[str] | None = None) -> int:
         settings = config.load(args.config)
         return args.func(args, settings)
     except (config.ConfigError, junit.JUnitParseError, MissingTokenError, GitHubError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        output.error(str(exc))
+        return 2
+    except SQLAlchemyError as exc:
+        # Keep the driver's message (e.g. "password authentication failed"), drop the SQL.
+        detail = str(getattr(exc, "orig", None) or exc).strip().splitlines()
+        output.error(f"database error ({type(exc).__name__}): {' '.join(detail[:3])}")
         return 2
 
 
