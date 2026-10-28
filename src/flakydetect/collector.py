@@ -12,8 +12,8 @@ from sqlalchemy.engine import Connection, Engine
 from . import db
 from .junit import TestResult, merge_attempts
 
-# (conn, repo, result, run_completed_at) -> canonical tests.id
-Resolver = Callable[[Connection, str, TestResult, datetime], int]
+# (conn, repo, result, run_completed_at, raw ids in this run) -> canonical tests.id
+Resolver = Callable[[Connection, str, TestResult, datetime, frozenset[str]], int]
 
 
 @dataclass
@@ -52,7 +52,8 @@ def get_or_create_test(conn: Connection, repo: str, test_id: str, seen_at: datet
     ).inserted_primary_key[0]
 
 
-def exact_resolver(conn: Connection, repo: str, result: TestResult, seen_at: datetime) -> int:
+def exact_resolver(conn: Connection, repo: str, result: TestResult, seen_at: datetime,
+                   current_ids: frozenset[str] = frozenset()) -> int:
     return get_or_create_test(conn, repo, result.test_id, seen_at, result.properties.get("fingerprint"))
 
 
@@ -79,10 +80,11 @@ def ingest(engine: Engine, repo: str, meta: RunMeta, results: list[TestResult],
                 completed_at=completed, ingested_at=now,
             )
         ).inserted_primary_key[0]
+        current_ids = frozenset(r.test_id for r in results)
         rows = [
             {
                 "run_pk": run_pk,
-                "test_pk": resolver(conn, repo, r, completed),
+                "test_pk": resolver(conn, repo, r, completed, current_ids),
                 "raw_test_id": r.test_id,
                 "status": r.status,
                 "duration": r.duration,

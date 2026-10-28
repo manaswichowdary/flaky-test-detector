@@ -1,3 +1,5 @@
+pytest_plugins = ["pytester"]
+
 import os
 
 import pytest
