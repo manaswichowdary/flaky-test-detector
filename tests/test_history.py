@@ -300,3 +300,14 @@ def test_in_sample_is_stable():
     from flakydetect.history import in_sample
     assert in_sample("x", 1)
     assert [in_sample(f"t{i}", 7) for i in range(50)] == [in_sample(f"t{i}", 7) for i in range(50)]
+
+
+@responses.activate
+def test_cap_counts_results_already_stored(engine, client, count):
+    # First import stores run 1 (2 results); a later import must not add run 2 past the cap.
+    mock_repo([run(1), run(2)], [art(20, 2), art(10, 1)],
+              {20: make_zip({"r.xml": XML_A}), 10: make_zip({"r.xml": XML_A})})
+    assert import_repo(engine, client, REPO, HistoryConfig(max_runs=1, max_results_per_repo=3)).results == 2
+    again = import_repo(engine, client, REPO, HistoryConfig(max_runs=10, max_results_per_repo=3))
+    assert again.results == 0 and "2 results stored" in again.stopped
+    assert count("test_results") == 2

@@ -16,6 +16,7 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 
 from . import db, junit
@@ -197,6 +198,14 @@ class DatabaseFull(RuntimeError):
     pass
 
 
+def stored_history_results(engine: Engine, repo: str) -> int:
+    with engine.connect() as conn:
+        return conn.execute(
+            select(func.count()).select_from(db.test_results.join(db.runs))
+            .where(db.runs.c.repo == repo, db.runs.c.source == "history")
+        ).scalar_one()
+
+
 def in_sample(test_id: str, one_in: int) -> bool:
     return one_in <= 1 or zlib.crc32(test_id.encode()) % one_in == 0
 
@@ -220,6 +229,8 @@ def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryCon
     """Import the newest `cfg.max_runs` default-branch runs that have JUnit artifacts.
     All shards of one environment in a run are stored together as one test run."""
     out = ImportResult(repo, sample=cfg.repo_sample.get(repo, 1))
+    # The cap covers everything stored for the repo, not just this import.
+    stored = stored_history_results(engine, repo)
     branch = default_branch(client, repo)
     runs, _ = junit_runs(client, repo, cfg.pattern_for(repo), branch, max_pages, cfg.max_runs)
     for run_id, arts in runs.items():
@@ -255,9 +266,9 @@ def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryCon
             results = [r for r in results if in_sample(r.test_id, one_in)]
             if not results:
                 continue
-            if out.results + len(results) > cfg.max_results_per_repo:
-                out.stopped = (f"next run has {len(results)} results; storing it would pass "
-                               f"max_results_per_repo={cfg.max_results_per_repo}")
+            if stored + out.results + len(results) > cfg.max_results_per_repo:
+                out.stopped = (f"{stored + out.results} results stored; the next run has {len(results)}, "
+                               f"which would pass max_results_per_repo={cfg.max_results_per_repo}")
                 break
             for r in results:
                 r.test_id = f"[{label}] {r.test_id}"
