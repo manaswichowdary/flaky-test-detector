@@ -1,10 +1,10 @@
 {
   "demo_repo": "manaswichowdary/flaky-test-detector",
-  "demo_test_runs": 39,
-  "demo_workflow_runs": 13,
-  "failed_workflow_runs": 13,
+  "demo_test_runs": 49,
+  "demo_workflow_runs": 17,
+  "failed_workflow_runs": 17,
   "false_alarms": [],
-  "generated_at": "2026-10-28 20:46 UTC",
+  "generated_at": "2026-10-28 21:01 UTC",
   "history": [
     {
       "repo": "apache/druid",
@@ -39,10 +39,10 @@
   "repos": {
     "apache/druid": 30,
     "home-assistant/core": 16,
-    "manaswichowdary/flaky-test-detector": 13
+    "manaswichowdary/flaky-test-detector": 17
   },
-  "reruns_avoided": 13,
-  "test_runs": 85,
+  "reruns_avoided": 17,
+  "test_runs": 95,
   "time_to_issue_minutes": [
     0.1,
     0.2,
@@ -51,5 +51,5 @@
     0.5,
     0.7
   ],
-  "workflow_runs": 59
+  "workflow_runs": 63
 }
