@@ -33,10 +33,11 @@ def client(monkeypatch):
 
 
 def mock_repo(runs, artifacts, blobs):
+    """runs: list of run dicts; artifacts: list of artifact dicts (newest first)."""
     responses.get(f"{API}/repos/{REPO}", json={"default_branch": "main"})
-    responses.get(f"{API}/repos/{REPO}/actions/runs", json={"workflow_runs": runs})
-    for run_id, arts in artifacts.items():
-        responses.get(f"{API}/repos/{REPO}/actions/runs/{run_id}/artifacts", json={"artifacts": arts})
+    responses.get(f"{API}/repos/{REPO}/actions/artifacts", json={"artifacts": artifacts})
+    for r in runs:
+        responses.get(f"{API}/repos/{REPO}/actions/runs/{r['id']}", json=r)
     for art_id, blob in blobs.items():
         responses.get(f"{API}/repos/{REPO}/actions/artifacts/{art_id}/zip", body=blob)
 
@@ -46,8 +47,9 @@ def run(i, sha="s"):
             "name": "CI", "updated_at": "2026-10-20T10:00:00Z", "run_started_at": "2026-10-20T09:50:00Z"}
 
 
-def art(i, name="test-results-py3.12", size=1000, expired=False):
-    return {"id": i, "name": name, "size_in_bytes": size, "expired": expired}
+def art(i, run_id, name="test-results-py3.12", size=1000, expired=False, branch="main"):
+    return {"id": i, "name": name, "size_in_bytes": size, "expired": expired,
+            "workflow_run": {"id": run_id, "head_branch": branch}}
 
 
 def test_extract_junit_skips_non_junit_and_junk():
@@ -65,54 +67,79 @@ def test_extract_junit_entry_limit():
     ("test-results-py3.12", "test-results-py3.12"),
     ("junit-1234567890-ubuntu", "junit-ubuntu"),
     ("surefire-reports-3f2a9c1d", "surefire-reports"),
+    ("test-results-full-3.14.10-7", "test-results-full-3.14.10"),
+    ("unit-test-reports-jdk25-000320bd", "unit-test-reports-jdk25"),
 ])
 def test_env_label(name, label):
     assert env_label(name) == label
 
 
 @responses.activate
-def test_import_filters_expired_and_names_and_is_resumable(engine, client, count):
-    runs = [run(1), run(2), run(3)]
-    mock_repo(runs, {
-        1: [art(10), art(11, name="coverage-report")],
-        2: [art(20, expired=True)],
-        3: [art(30, name="junit-ubuntu"), art(31, name="junit-macos")],
-    }, {10: make_zip({"r.xml": XML_A}), 30: make_zip({"r.xml": XML_A}), 31: make_zip({"r.xml": XML_B})})
+def test_import_filters_and_is_resumable(engine, client, count):
+    arts = [
+        art(30, 3, name="junit-ubuntu"), art(31, 3, name="junit-macos"),
+        art(20, 2, expired=True),
+        art(11, 1, name="coverage-report"), art(10, 1),
+        art(40, 4, branch="feature-x"),
+    ]
+    mock_repo([run(1), run(2), run(3), run(4)], arts,
+              {10: make_zip({"r.xml": XML_A}), 30: make_zip({"r.xml": XML_A}),
+               31: make_zip({"r.xml": XML_B})})
     cfg = HistoryConfig(max_runs=10)
     out = import_repo(engine, client, REPO, cfg)
-    assert (out.runs_imported, out.runs_without_junit, out.stored_runs, out.results) == (2, 1, 3, 5)
+    assert (out.runs_imported, out.stored_runs, out.results) == (2, 3, 5)
     assert count("runs") == 3 and count("test_results") == 5
-    # macOS and ubuntu legs are separate tests.
-    assert count("tests") == 5
+    assert count("tests") == 5  # macOS and ubuntu legs are separate tests
     downloads = sum("/zip" in c.request.url for c in responses.calls)
     again = import_repo(engine, client, REPO, cfg)
     assert again.runs_already == 2 and again.results == 0
     assert sum("/zip" in c.request.url for c in responses.calls) == downloads  # no re-download
-    assert count("test_results") == 5
+
+
+@responses.activate
+def test_shards_of_one_env_become_one_test_run(engine, client, count):
+    arts = [art(1, 9, name="test-results-full-3.14-1"), art(2, 9, name="test-results-full-3.14-2")]
+    mock_repo([run(9)], arts, {1: make_zip({"a.xml": XML_A}), 2: make_zip({"b.xml": XML_B})})
+    out = import_repo(engine, client, REPO, HistoryConfig())
+    assert (out.stored_runs, out.results) == (1, 3)
+    from sqlalchemy import select
+
+    from flakydetect import db
+    with engine.connect() as conn:
+        ids = set(conn.execute(select(db.tests.c.test_id)).scalars())
+    assert "[test-results-full-3.14] pkg.U::c" in ids
 
 
 @responses.activate
 def test_import_respects_size_and_max_runs(engine, client):
-    mock_repo([run(1), run(2)], {1: [art(10, size=500 * 1024 * 1024)], 2: [art(20)]},
+    mock_repo([run(1), run(2)], [art(20, 2), art(10, 1, size=500 * 1024 * 1024)],
               {20: make_zip({"r.xml": XML_B})})
     out = import_repo(engine, client, REPO, HistoryConfig(max_runs=10, max_artifact_mb=100))
     assert out.artifacts_skipped == 1 and out.runs_imported == 1
-    assert import_repo(engine, client, "up/stream", HistoryConfig(max_runs=1)).runs_imported == 0
+
+
+@responses.activate
+def test_import_max_runs_takes_newest(engine, client):
+    mock_repo([run(1), run(2)], [art(20, 2), art(10, 1)],
+              {20: make_zip({"r.xml": XML_B}), 10: make_zip({"r.xml": XML_A})})
+    out = import_repo(engine, client, REPO, HistoryConfig(max_runs=1))
+    assert out.runs_imported == 1 and out.results == 1
 
 
 @responses.activate
 def test_import_records_bad_zip(engine, client):
-    mock_repo([run(1)], {1: [art(10)]}, {10: b"not a zip"})
+    mock_repo([run(1)], [art(10, 1)], {10: b"not a zip"})
     out = import_repo(engine, client, REPO, HistoryConfig())
     assert out.artifacts_skipped == 1 and "test-results" in out.errors[0]
 
 
 @responses.activate
 def test_discover_summary(client):
-    mock_repo([run(1), run(2)], {1: [art(10, size=2 * 1024 * 1024)], 2: []}, {})
+    mock_repo([], [art(10, 1, size=2 * 1024 * 1024), art(11, 1, name="junit-b"),
+                   art(12, 2, branch="other"), art(13, 3, name="dist")], {})
     res = discover(client, REPO)
-    assert (res.runs_checked, res.runs_with_junit, res.avg_mb) == (2, 1, 2.0)
-    assert "1/2 recent runs" in res.summary()
+    assert (res.runs_with_junit, res.branch) == (1, "main")
+    assert "1 runs on main" in res.summary()
 
 
 @responses.activate

@@ -112,5 +112,12 @@ class GitHubClient:
     def list_run_artifacts(self, repo: str, run_id: int) -> Iterator[dict]:
         return self.paginate(f"/repos/{repo}/actions/runs/{run_id}/artifacts", key="artifacts")
 
+    def list_repo_artifacts(self, repo: str, max_pages: int = 10) -> Iterator[dict]:
+        """All artifacts in the repo, newest first; each carries its `workflow_run`."""
+        return self.paginate(f"/repos/{repo}/actions/artifacts", key="artifacts", max_pages=max_pages)
+
+    def get_run(self, repo: str, run_id: int) -> dict:
+        return self.get(f"/repos/{repo}/actions/runs/{run_id}")
+
     def download_artifact(self, repo: str, artifact_id: int) -> bytes:
         return self.request("GET", f"/repos/{repo}/actions/artifacts/{artifact_id}/zip").content

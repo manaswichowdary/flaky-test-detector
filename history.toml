@@ -19,7 +19,7 @@ candidates = [
 ]
 repos = []              # the 2 chosen repos, filled in after discovery
 max_runs = 30           # workflow runs per repo (newest first, default branch)
-sample_runs = 25        # runs checked per candidate during discovery
+sample_pages = 3        # pages of 100 artifacts scanned per candidate during discovery
 artifact_pattern = "(?i)(junit|test-?results?|test-?reports?|surefire)"
 max_artifact_mb = 200
 max_results_per_repo = 300000   # keeps the Supabase free tier (500 MB) safe

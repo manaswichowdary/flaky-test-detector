@@ -1,9 +1,9 @@
 """Import test history from public repos that upload JUnit XML as GitHub Actions artifacts.
 
-Each (workflow run, artifact) becomes one stored run. Test ids are prefixed with the
-artifact's environment label (e.g. "test-results-py3.12") so the same test on different
-matrix legs is tracked separately; otherwise a test failing only on one Python version
-would look flaky.
+Each (workflow run, environment) becomes one stored run, where the environment is the
+artifact name minus run ids and shard numbers (e.g. "test-results-py3.12"). Test ids are
+prefixed with it so the same test on different matrix legs is tracked separately;
+otherwise a test failing only on one Python version would look flaky.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ class HistoryConfig:
     candidates: list[str] = field(default_factory=list)
     repos: list[str] = field(default_factory=list)
     max_runs: int = 30
-    sample_runs: int = 25
+    sample_pages: int = 3
     artifact_pattern: str = DEFAULT_PATTERN
     max_artifact_mb: int = 200
     max_results_per_repo: int = 300_000
@@ -46,15 +46,27 @@ def load_config(path: str | Path = "history.toml") -> HistoryConfig:
 
 
 def env_label(artifact_name: str) -> str:
-    """Drop run-specific parts (long numbers, commit shas) so the label is stable across runs."""
+    """Stable environment label for an artifact: drop run-specific parts (long numbers,
+    commit shas) and a trailing shard index ("-3"), since suites rebalance tests across
+    shards between runs."""
     label = re.sub(r"(?i)\b[0-9a-f]{7,40}\b|\d{6,}", "", artifact_name)
-    return re.sub(r"[-_.]{2,}", "-", label).strip("-_. ") or artifact_name
+    label = re.sub(r"[-_.]{2,}", "-", label).strip("-_. ")
+    label = re.sub(r"[-_](\d{1,3})$", "", label)
+    return label or artifact_name
 
 
-def matching_artifacts(client: GitHubClient, repo: str, run_id: int, pattern: str) -> list[dict]:
+def junit_runs(client: GitHubClient, repo: str, pattern: str, branch: str,
+               max_pages: int) -> dict[int, list[dict]]:
+    """Unexpired JUnit-looking artifacts on `branch`, grouped by workflow run (newest first).
+    Uses the repo-wide artifacts listing: 100 artifacts per API call, any workflow."""
     rx = re.compile(pattern)
-    return [a for a in client.list_run_artifacts(repo, run_id)
-            if rx.search(a["name"]) and not a.get("expired")]
+    runs: dict[int, list[dict]] = {}
+    for art in client.list_repo_artifacts(repo, max_pages=max_pages):
+        run = art.get("workflow_run") or {}
+        if art.get("expired") or not rx.search(art["name"]) or run.get("head_branch") != branch:
+            continue
+        runs.setdefault(run["id"], []).append(art)
+    return runs
 
 
 def extract_junit(blob: bytes, max_entries: int = 5000, max_uncompressed_mb: int = 1024) -> list[junit.TestResult]:
@@ -77,7 +89,7 @@ def extract_junit(blob: bytes, max_entries: int = 5000, max_uncompressed_mb: int
 @dataclass
 class DiscoverResult:
     repo: str
-    runs_checked: int = 0
+    branch: str = ""
     runs_with_junit: int = 0
     avg_mb: float = 0.0
     names: list[str] = field(default_factory=list)
@@ -86,8 +98,8 @@ class DiscoverResult:
     def summary(self) -> str:
         if self.error:
             return f"{self.repo}: error {self.error}"
-        return (f"{self.repo}: {self.runs_with_junit}/{self.runs_checked} recent runs have JUnit "
-                f"artifacts, avg {self.avg_mb:.1f} MB/run, e.g. {', '.join(self.names[:3]) or '-'}")
+        return (f"{self.repo}: {self.runs_with_junit} runs on {self.branch} with JUnit artifacts, "
+                f"avg {self.avg_mb:.1f} MB/run, e.g. {', '.join(self.names[:3]) or '-'}")
 
 
 def default_branch(client: GitHubClient, repo: str) -> str:
@@ -95,22 +107,15 @@ def default_branch(client: GitHubClient, repo: str) -> str:
 
 
 def discover(client: GitHubClient, repo: str, pattern: str = DEFAULT_PATTERN,
-             sample_runs: int = 25) -> DiscoverResult:
+             sample_pages: int = 3) -> DiscoverResult:
     out = DiscoverResult(repo)
     try:
-        branch = default_branch(client, repo)
-        runs = list(client.list_workflow_runs(repo, max_pages=1, status="completed",
-                                              branch=branch, per_page=sample_runs))
-        sizes, names = [], set()
-        for run in runs:
-            arts = matching_artifacts(client, repo, run["id"], pattern)
-            out.runs_checked += 1
-            if arts:
-                out.runs_with_junit += 1
-                sizes.append(sum(a["size_in_bytes"] for a in arts) / MB)
-                names.update(a["name"] for a in arts)
+        out.branch = default_branch(client, repo)
+        runs = junit_runs(client, repo, pattern, out.branch, sample_pages)
+        out.runs_with_junit = len(runs)
+        sizes = [sum(a["size_in_bytes"] for a in arts) / MB for arts in runs.values()]
         out.avg_mb = sum(sizes) / len(sizes) if sizes else 0.0
-        out.names = sorted(names)
+        out.names = sorted({env_label(a["name"]) for arts in runs.values() for a in arts})
     except GitHubError as exc:
         out.error = str(exc)
     return out
@@ -121,8 +126,7 @@ class ImportResult:
     repo: str
     runs_imported: int = 0      # workflow runs with at least one JUnit artifact stored
     runs_already: int = 0
-    runs_without_junit: int = 0
-    stored_runs: int = 0        # (run, artifact) rows written
+    stored_runs: int = 0        # (run, artifact env) rows written
     results: int = 0
     artifacts_skipped: int = 0
     errors: list[str] = field(default_factory=list)
@@ -130,54 +134,55 @@ class ImportResult:
     def summary(self) -> str:
         return (f"{self.repo}: imported {self.runs_imported} workflow runs "
                 f"({self.stored_runs} test runs, {self.results} test results); "
-                f"{self.runs_already} already stored, {self.runs_without_junit} without JUnit, "
-                f"{self.artifacts_skipped} artifacts skipped")
+                f"{self.runs_already} already stored, {self.artifacts_skipped} artifacts skipped")
+
+
+def _group_by_env(arts: list[dict]) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for art in arts:
+        groups.setdefault(env_label(art["name"]), []).append(art)
+    return groups
 
 
 def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryConfig,
-                scan_limit: int | None = None) -> ImportResult:
+                max_pages: int = 30) -> ImportResult:
+    """Import the newest `cfg.max_runs` default-branch runs that have JUnit artifacts.
+    All shards of one environment in a run are stored together as one test run."""
     out = ImportResult(repo)
     branch = default_branch(client, repo)
-    scan_limit = scan_limit or cfg.max_runs * 5
-    scanned = 0
-    for run in client.list_workflow_runs(repo, max_pages=20, status="completed", branch=branch):
-        if out.runs_imported + out.runs_already >= cfg.max_runs or scanned >= scan_limit:
-            break
+    runs = junit_runs(client, repo, cfg.artifact_pattern, branch, max_pages)
+    for run_id, arts in list(runs.items())[: cfg.max_runs]:
         if out.results >= cfg.max_results_per_repo:
             out.errors.append(f"stopped at max_results_per_repo={cfg.max_results_per_repo}")
             break
-        scanned += 1
-        arts = matching_artifacts(client, repo, run["id"], cfg.artifact_pattern)
-        if not arts:
-            out.runs_without_junit += 1
-            continue
+        envs = _group_by_env(arts)
+        run = client.get_run(repo, run_id)
         attempt = int(run.get("run_attempt") or 1)
-        keys = [f"{run['id']}/{env_label(a['name'])}" for a in arts]
-        if all(run_exists(engine, repo, k, attempt) for k in keys):
+        keys = {label: f"{run_id}/{label}" for label in envs}
+        if all(run_exists(engine, repo, k, attempt) for k in keys.values()):
             out.runs_already += 1
             continue
         stored_any = False
-        for art, key in zip(arts, keys):
-            if run_exists(engine, repo, key, attempt):
+        for label, group in envs.items():
+            if run_exists(engine, repo, keys[label], attempt):
                 continue
-            if art["size_in_bytes"] > cfg.max_artifact_mb * MB:
-                out.artifacts_skipped += 1
-                continue
-            try:
-                results = extract_junit(client.download_artifact(repo, art["id"]))
-            except (GitHubError, ValueError, zipfile.BadZipFile) as exc:
-                out.artifacts_skipped += 1
-                out.errors.append(f"{art['name']}: {exc}")
-                continue
+            results: list[junit.TestResult] = []
+            for art in group:
+                if art["size_in_bytes"] > cfg.max_artifact_mb * MB:
+                    out.artifacts_skipped += 1
+                    continue
+                try:
+                    results.extend(extract_junit(client.download_artifact(repo, art["id"])))
+                except (GitHubError, ValueError, zipfile.BadZipFile) as exc:
+                    out.artifacts_skipped += 1
+                    out.errors.append(f"{art['name']}: {exc}")
             if not results:
-                out.artifacts_skipped += 1
                 continue
-            label = env_label(art["name"])
             for r in results:
                 r.test_id = f"[{label}] {r.test_id}"
             meta = RunMeta(
-                run_id=key, run_attempt=attempt, sha=run["head_sha"], branch=run.get("head_branch"),
-                workflow=run.get("name"), source="history",
+                run_id=keys[label], run_attempt=attempt, sha=run["head_sha"],
+                branch=run.get("head_branch"), workflow=run.get("name"), source="history",
                 started_at=parse_time(run.get("run_started_at")),
                 completed_at=parse_time(run.get("updated_at")),
             )

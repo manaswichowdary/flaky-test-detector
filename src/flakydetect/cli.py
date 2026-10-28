@@ -94,7 +94,7 @@ def cmd_discover_history(args, settings) -> int:
     client = GitHubClient()
     for repo in repos:
         output.result("discover-history", history.discover(
-            client, repo, cfg.artifact_pattern, cfg.sample_runs).summary())
+            client, repo, cfg.artifact_pattern, cfg.sample_pages).summary())
     return 0
 
 
