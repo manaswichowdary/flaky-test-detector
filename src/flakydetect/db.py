@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Integer, MetaData, String, Table, Text,
+    text, Boolean, Column, DateTime, Float, ForeignKey, Integer, MetaData, String, Table, Text,
     UniqueConstraint, create_engine, event,
 )
 from sqlalchemy.engine import Engine
@@ -113,3 +113,14 @@ def get_engine(url: str) -> Engine:
 
 def init_db(engine: Engine) -> None:
     metadata.create_all(engine)
+
+
+def database_size_mb(engine: Engine) -> float:
+    """Size of the whole database (data + indexes) in MB."""
+    with engine.connect() as conn:
+        if engine.dialect.name == "postgresql":
+            size = conn.execute(text("SELECT pg_database_size(current_database())")).scalar_one()
+        else:
+            pages = conn.execute(text("PRAGMA page_count")).scalar_one()
+            size = pages * conn.execute(text("PRAGMA page_size")).scalar_one()
+    return size / (1024 * 1024)

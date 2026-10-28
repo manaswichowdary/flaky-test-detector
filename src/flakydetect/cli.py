@@ -114,16 +114,37 @@ def cmd_import_history(args, settings) -> int:
         output.result("import-history", "no repos selected in history.toml; nothing to import")
         return 0
     client = GitHubClient()
-    output.result("import-history", client.rate_limit())
     engine = _engine(settings, args.require_persistent_db)
+    try:
+        start_mb = history.check_db_size(engine, cfg.max_db_mb)
+    except history.DatabaseFull as exc:
+        output.error(f"not importing: {exc}")
+        return 3
+    output.result("import-history", f"{client.rate_limit()}; database {start_mb:.1f} MB "
+                                    f"(limit {cfg.max_db_mb:.0f} MB)")
+    full = False
     for repo in repos:
         res = history.import_repo(engine, client, repo, cfg)
         scores = scorer.score_repo(engine, repo, settings)
         flaky = sorted((s for s in scores if s.is_flaky), key=lambda s: -s.score)
-        lines = [res.summary(), f"{repo}: {len(scores)} tests scored, {len(flaky)} flaky"]
+        size = db.database_size_mb(engine)
+        lines = [res.summary(),
+                 f"{repo}: {len(scores)} tests scored, {len(flaky)} flaky; database now {size:.1f} MB"]
         lines += [f"  {s.score:.2f} {s.test_id}" for s in flaky[:10]]
         lines += [f"  warning: {e}" for e in res.errors[:5]]
         output.result("import-history", "\n".join(lines))
+        if size > cfg.max_db_mb:
+            full = True
+            break
+    if full:
+        output.error(f"stopped: database passed max_db_mb={cfg.max_db_mb:.0f} MB")
+        return 3
+    return 0
+
+
+def cmd_db_size(args, settings) -> int:
+    engine = _engine(settings, args.require_persistent_db)
+    output.result("db-size", f"database {db.database_size_mb(engine):.1f} MB")
     return 0
 
 
@@ -169,6 +190,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--history-config", default="history.toml")
     p.add_argument("--max-runs", type=int)
     p.set_defaults(func=cmd_import_history)
+
+    p = sub.add_parser("db-size", help="print the database size in MB")
+    p.set_defaults(func=cmd_db_size)
 
     p = sub.add_parser("quarantine-list", help="print quarantined test ids (auto mode only)")
     p.add_argument("--repo")

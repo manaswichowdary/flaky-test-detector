@@ -160,6 +160,7 @@ def test_repo_history_toml_is_valid():
     cfg = load_config("history.toml")
     assert len(cfg.candidates) >= 2 and cfg.max_results_per_repo > 0
     assert len(cfg.repos) == 2
+    assert cfg.max_results_per_repo == 100_000 and cfg.max_db_mb == 300
     assert cfg.pattern_for("home-assistant/core") == "^test-results-full-"
     assert cfg.pattern_for("other/repo") == cfg.artifact_pattern
 
@@ -228,3 +229,51 @@ def test_discover_cli_emits_one_annotation(tmp_path, monkeypatch, capsys):
     assert cli.main(["discover-history", "x/1", "x/2", "x/3"]) == 0
     out = capsys.readouterr().out
     assert out.count("::notice") == 1 and "x/3: 0 runs" in out
+
+
+@responses.activate
+def test_result_cap_is_strict(engine, client, count):
+    # XML_A has 2 results per run; a cap of 3 allows the first run only.
+    mock_repo([run(1), run(2)], [art(20, 2), art(10, 1)],
+              {20: make_zip({"r.xml": XML_A}), 10: make_zip({"r.xml": XML_A})})
+    out = import_repo(engine, client, REPO, HistoryConfig(max_results_per_repo=3))
+    assert out.results == 2 and out.runs_imported == 1
+    assert "max_results_per_repo=3" in out.stopped
+    assert count("test_results") == 2
+
+
+@responses.activate
+def test_import_stops_when_database_too_big(engine, client, count, monkeypatch):
+    from flakydetect import db as dbmod
+    sizes = iter([10.0, 400.0])
+    monkeypatch.setattr(dbmod, "database_size_mb", lambda e: next(sizes))
+    mock_repo([run(1), run(2)], [art(20, 2), art(10, 1)],
+              {20: make_zip({"r.xml": XML_B}), 10: make_zip({"r.xml": XML_B})})
+    out = import_repo(engine, client, REPO, HistoryConfig(max_db_mb=300))
+    assert out.runs_imported == 1 and "400 MB, over the 300 MB limit" in out.stopped
+    assert count("runs") == 1
+
+
+def test_database_size_mb(engine):
+    from flakydetect import db as dbmod
+    assert dbmod.database_size_mb(engine) > 0
+
+
+def test_import_cli_refuses_when_db_full(tmp_path, monkeypatch, capsys):
+    from flakydetect import history as hist
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("FLAKY_DATABASE_URL", f"sqlite:///{tmp_path / 'f.db'}")
+    (tmp_path / "history.toml").write_text('[history]\nrepos = ["a/b"]\nmax_db_mb = 0\n')
+    called = []
+    monkeypatch.setattr(hist, "import_repo", lambda *a, **k: called.append(1))
+    assert cli.main(["import-history"]) == 3
+    assert "not importing" in capsys.readouterr().err and not called
+
+
+def test_db_size_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FLAKY_DATABASE_URL", f"sqlite:///{tmp_path / 'f.db'}")
+    assert cli.main(["db-size"]) == 0
+    assert "database" in capsys.readouterr().out

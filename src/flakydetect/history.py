@@ -17,7 +17,7 @@ from pathlib import Path
 
 from sqlalchemy.engine import Engine
 
-from . import junit
+from . import db, junit
 from .collector import RunMeta, ingest, run_exists
 from .github_api import GitHubClient, GitHubError, parse_time
 
@@ -33,7 +33,8 @@ class HistoryConfig:
     sample_pages: int = 3
     artifact_pattern: str = DEFAULT_PATTERN
     max_artifact_mb: int = 200
-    max_results_per_repo: int = 300_000
+    max_results_per_repo: int = 100_000
+    max_db_mb: float = 300.0     # stop importing once the database is this big
     repo_patterns: dict[str, str] = field(default_factory=dict)  # per-repo artifact_pattern
 
     def pattern_for(self, repo: str) -> str:
@@ -176,12 +177,25 @@ class ImportResult:
     stored_runs: int = 0        # (run, artifact env) rows written
     results: int = 0
     artifacts_skipped: int = 0
+    stopped: str | None = None   # why the import stopped early (row cap, DB size limit)
     errors: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
-        return (f"{self.repo}: imported {self.runs_imported} workflow runs "
+        text = (f"{self.repo}: imported {self.runs_imported} workflow runs "
                 f"({self.stored_runs} test runs, {self.results} test results); "
                 f"{self.runs_already} already stored, {self.artifacts_skipped} artifacts skipped")
+        return text + (f"; stopped: {self.stopped}" if self.stopped else "")
+
+
+class DatabaseFull(RuntimeError):
+    pass
+
+
+def check_db_size(engine: Engine, limit_mb: float) -> float:
+    size = db.database_size_mb(engine)
+    if size > limit_mb:
+        raise DatabaseFull(f"database is {size:.0f} MB, over the {limit_mb:.0f} MB limit (max_db_mb)")
+    return size
 
 
 def _group_by_env(arts: list[dict]) -> dict[str, list[dict]]:
@@ -199,8 +213,12 @@ def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryCon
     branch = default_branch(client, repo)
     runs, _ = junit_runs(client, repo, cfg.pattern_for(repo), branch, max_pages, cfg.max_runs)
     for run_id, arts in runs.items():
-        if out.results >= cfg.max_results_per_repo:
-            out.errors.append(f"stopped at max_results_per_repo={cfg.max_results_per_repo}")
+        if out.stopped:
+            break
+        try:
+            check_db_size(engine, cfg.max_db_mb)
+        except DatabaseFull as exc:
+            out.stopped = str(exc)
             break
         envs = _group_by_env(arts)
         run = client.get_run(repo, run_id)
@@ -225,6 +243,10 @@ def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryCon
                     out.errors.append(f"{art['name']}: {exc}")
             if not results:
                 continue
+            if out.results + len(results) > cfg.max_results_per_repo:
+                out.stopped = (f"next run has {len(results)} results; storing it would pass "
+                               f"max_results_per_repo={cfg.max_results_per_repo}")
+                break
             for r in results:
                 r.test_id = f"[{label}] {r.test_id}"
             meta = RunMeta(

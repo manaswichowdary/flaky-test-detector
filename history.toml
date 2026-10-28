@@ -25,7 +25,8 @@ max_runs = 30           # workflow runs per repo (newest first, default branch)
 sample_pages = 3        # pages of 100 artifacts scanned per candidate during discovery
 artifact_pattern = "(?i)(junit|test-?results?|test-?reports?|surefire)"
 max_artifact_mb = 200
-max_results_per_repo = 300000   # keeps the Supabase free tier (500 MB) safe
+max_results_per_repo = 100000   # strict per-repo cap; a run that would pass it is skipped
+max_db_mb = 300                 # stop importing past this (Supabase free tier is 500 MB)
 
 [history.repo_patterns]
 # Only the main suite; the MariaDB/Postgres variants would spend the row budget on
