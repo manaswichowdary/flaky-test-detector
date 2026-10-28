@@ -26,6 +26,28 @@ def workflow_run_id(run_key: str) -> str:
 
 
 @dataclass
+class HistoryRepo:
+    repo: str
+    workflow_runs: int
+    test_runs: int
+    sample_one_in: int          # 1 = not sampled
+    sampled_tests: int          # distinct tests stored
+    sampled_results: int        # test results stored
+
+    @property
+    def results_per_run(self) -> float:
+        return self.sampled_results / self.test_runs if self.test_runs else 0.0
+
+    @property
+    def approx_full_results_per_run(self) -> int:
+        return round(self.results_per_run * self.sample_one_in)
+
+    @property
+    def approx_full_results(self) -> int:
+        return self.sampled_results * self.sample_one_in
+
+
+@dataclass
 class Metrics:
     demo_repo: str
     planted_total: int
@@ -40,6 +62,8 @@ class Metrics:
     test_runs: int
     workflow_runs: int
     repos: dict[str, int] = field(default_factory=dict)  # repo -> workflow runs
+    demo_test_runs: int = 0
+    history: list[HistoryRepo] = field(default_factory=list)
     generated_at: str = ""
 
     @property
@@ -58,27 +82,51 @@ class Metrics:
     @classmethod
     def from_dict(cls, d: dict) -> "Metrics":
         d = {k: v for k, v in d.items() if k not in ("median_minutes", "max_minutes")}
+        d["history"] = [HistoryRepo(**h) for h in d.get("history", [])]
         return cls(**d)
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True)
 
     def markdown(self) -> str:
+        live = f"Live: `demo.yml` runs on GitHub ({self.demo_workflow_runs} workflow runs, " \
+               f"{self.demo_test_runs} test runs)"
         found = len(self.planted_found)
         tti = (f"median {fmt_minutes(self.median_minutes)}, max {fmt_minutes(self.max_minutes)} "
                f"({len(self.time_to_issue_minutes)} issues)" if self.time_to_issue_minutes else "no issues yet")
-        repos = ", ".join(f"{r} {n}" for r, n in sorted(self.repos.items()))
-        return "\n".join([
-            "| Metric | Result |",
-            "|---|---|",
-            f"| Planted flaky tests found | **{found} of {self.planted_total}** |",
-            f"| False alarms | **{len(self.false_alarms)}** |",
+        hist_runs = sum(h.workflow_runs for h in self.history)
+        hist_test_runs = sum(h.test_runs for h in self.history)
+        lines = [
+            "| Metric | Result | Source |",
+            "|---|---|---|",
+            f"| Planted flaky tests found | **{found} of {self.planted_total}** | {live} |",
+            f"| False alarms | **{len(self.false_alarms)}** | {live} |",
             f"| Reruns avoided on the demo repo | **{self.reruns_avoided} of {self.failed_workflow_runs}** "
-            f"failed CI runs had only flaky failures |",
-            f"| Time from a flaky failure to a quarantine issue | **{tti}** |",
-            f"| Total CI test runs analyzed | **{self.test_runs:,}** test runs from "
-            f"{self.workflow_runs:,} workflow runs ({repos}) |",
-        ])
+            f"failed CI runs had only flaky failures | {live} |",
+            f"| Time from a flaky failure to a quarantine issue | **{tti}** | Live: failing run's completion "
+            f"time to the GitHub issue's `created_at` |",
+            f"| Total CI test runs analyzed | **{self.test_runs:,}** test runs from {self.workflow_runs:,} "
+            f"workflow runs | Live: {self.demo_test_runs:,} demo test runs + {hist_test_runs:,} imported "
+            f"from {hist_runs:,} public workflow runs (sampled, below) |",
+        ]
+        if self.history:
+            lines += [
+                "",
+                "Imported history is **sampled**: a stable 1-in-N subset of each suite's tests (the same "
+                "tests in every run), because one full run of either suite is bigger than the "
+                "100k-results-per-repo budget. Full-suite sizes are estimates (sampled count × N).",
+                "",
+                "| Repo | Workflow runs | Sampling | Tests analyzed (sampled) | Results analyzed (sampled) "
+                "| ≈ Full suite |",
+                "|---|---|---|---|---|---|",
+            ]
+            for h in self.history:
+                sampling = f"1 in {h.sample_one_in} tests" if h.sample_one_in > 1 else "all tests"
+                lines.append(
+                    f"| {h.repo} | {h.workflow_runs} | {sampling} | {h.sampled_tests:,} | {h.sampled_results:,} "
+                    f"| ≈ {h.sampled_tests * h.sample_one_in:,} tests, ≈ {h.approx_full_results_per_run:,} "
+                    f"results/run, ≈ {h.approx_full_results:,} results |")
+        return "\n".join(lines)
 
 
 def fmt_minutes(m: float | None) -> str:
@@ -87,8 +135,31 @@ def fmt_minutes(m: float | None) -> str:
     return f"{m:.1f} min" if m < 120 else f"{m / 60:.1f} h"
 
 
+def _history(engine: Engine, sample: dict[str, int]) -> list[HistoryRepo]:
+    out = []
+    with engine.connect() as conn:
+        repos = conn.execute(select(db.runs.c.repo).where(db.runs.c.source == "history")
+                             .distinct().order_by(db.runs.c.repo)).scalars().all()
+        for repo in repos:
+            run_keys = conn.execute(select(db.runs.c.run_id, db.runs.c.run_attempt)
+                                    .where(db.runs.c.repo == repo, db.runs.c.source == "history")).all()
+            results, tests = conn.execute(
+                select(func.count(), func.count(db.test_results.c.test_pk.distinct()))
+                .select_from(db.test_results.join(db.runs))
+                .where(db.runs.c.repo == repo, db.runs.c.source == "history")).one()
+            out.append(HistoryRepo(
+                repo=repo,
+                workflow_runs=len({(workflow_run_id(k), a) for k, a in run_keys}),
+                test_runs=len(run_keys),
+                sample_one_in=sample.get(repo, 1),
+                sampled_tests=tests,
+                sampled_results=results,
+            ))
+    return out
+
+
 def compute(engine: Engine, demo_repo: str, planted: dict[str, str], demo_prefix: str = "demo.tests.",
-            now: datetime | None = None) -> Metrics:
+            now: datetime | None = None, sample: dict[str, int] | None = None) -> Metrics:
     with engine.connect() as conn:
         tests = {r.id: r for r in conn.execute(
             select(db.tests.c.id, db.tests.c.test_id, db.test_scores.c.is_flaky)
@@ -163,6 +234,8 @@ def compute(engine: Engine, demo_repo: str, planted: dict[str, str], demo_prefix
         test_runs=test_runs,
         workflow_runs=sum(len(v) for v in per_repo.values()),
         repos={repo: len(v) for repo, v in per_repo.items()},
+        demo_test_runs=len({(r.run_id, r.run_attempt) for r in results}),
+        history=_history(engine, sample or {}),
         generated_at=(now or db.utcnow()).strftime("%Y-%m-%d %H:%M UTC"),
     )
 

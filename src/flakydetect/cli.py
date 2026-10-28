@@ -170,7 +170,8 @@ def cmd_metrics(args, settings) -> int:
         output.error("--repo is required outside GitHub Actions")
         return 2
     engine = _engine(settings, args.require_persistent_db)
-    m = metrics.compute(engine, repo, _load_planted())
+    sample = history.load_config(args.history_config).repo_sample
+    m = metrics.compute(engine, repo, _load_planted(), sample=sample)
     if args.json:
         Path(args.json).write_text(m.to_json() + "\n")
     output.result("metrics", m.markdown())
@@ -236,6 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("metrics", help="compute the README numbers for the demo repo")
     p.add_argument("--repo")
     p.add_argument("--json", help="also write the raw numbers to this file")
+    p.add_argument("--history-config", default="history.toml", help="sampling rates of imported repos")
     p.set_defaults(func=cmd_metrics)
 
     p = sub.add_parser("db-size", help="print the database size in MB")
