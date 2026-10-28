@@ -166,3 +166,62 @@ def test_import_history_cli_noop_without_repos(tmp_path, monkeypatch, capsys):
     (tmp_path / "history.toml").write_text("[history]\nrepos = []\n")
     assert cli.main(["import-history"]) == 0
     assert "nothing to import" in capsys.readouterr().out
+
+
+def mock_big_repo(runs, run_artifacts, blobs):
+    """A repo whose repo-wide artifacts listing times out (HTTP 500)."""
+    responses.get(f"{API}/repos/{REPO}", json={"default_branch": "main"})
+    responses.get(f"{API}/repos/{REPO}/actions/artifacts", status=500, json={"message": ""})
+    responses.get(f"{API}/repos/{REPO}/actions/workflows", json={"workflows": [
+        {"id": 1, "name": "Labeler", "path": ".github/workflows/labeler.yml", "state": "active"},
+        {"id": 2, "name": "Build", "path": ".github/workflows/build.yml", "state": "active"},
+        {"id": 3, "name": "Unit tests", "path": ".github/workflows/unit.yml", "state": "active"},
+        {"id": 4, "name": "Old tests", "path": ".github/workflows/old.yml", "state": "disabled_manually"},
+    ]})
+    responses.get(f"{API}/repos/{REPO}/actions/workflows/3/runs", json={"workflow_runs": runs})
+    responses.get(f"{API}/repos/{REPO}/actions/workflows/2/runs", json={"workflow_runs": []})
+    for r in runs:
+        responses.get(f"{API}/repos/{REPO}/actions/runs/{r['id']}", json=r)
+        responses.get(f"{API}/repos/{REPO}/actions/runs/{r['id']}/artifacts",
+                      json={"artifacts": run_artifacts.get(r["id"], [])})
+    for art_id, blob in blobs.items():
+        responses.get(f"{API}/repos/{REPO}/actions/artifacts/{art_id}/zip", body=blob)
+
+
+@responses.activate
+def test_discover_falls_back_to_test_workflows_on_5xx(client):
+    mock_big_repo([run(1), run(2), run(3)], {1: [art(10, 1)], 3: [art(30, 3, name="junit-x")]}, {})
+    res = discover(client, REPO)
+    assert res.runs_with_junit == 2 and res.error is None
+    assert "[workflows: Unit tests]" in res.summary()
+    urls = [c.request.url for c in responses.calls]
+    assert not any("/workflows/1/runs" in u or "/workflows/4/runs" in u for u in urls)
+
+
+@responses.activate
+def test_import_uses_fallback(engine, client, count):
+    mock_big_repo([run(1), run(2)], {1: [art(10, 1)], 2: [art(20, 2)]},
+                  {10: make_zip({"r.xml": XML_A}), 20: make_zip({"r.xml": XML_B})})
+    out = import_repo(engine, client, REPO, HistoryConfig(max_runs=1))
+    assert out.runs_imported == 1 and count("runs") == 1
+
+
+@responses.activate
+def test_client_errors_are_not_masked_by_fallback(client):
+    responses.get(f"{API}/repos/{REPO}", json={"default_branch": "main"})
+    responses.get(f"{API}/repos/{REPO}/actions/artifacts", status=403, json={"message": "Forbidden"})
+    assert "403" in discover(client, REPO).summary()
+
+
+def test_discover_cli_emits_one_annotation(tmp_path, monkeypatch, capsys):
+    from flakydetect import history as hist
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    (tmp_path / "history.toml").write_text('[history]\ncandidates = ["a/%d" ]\n'.replace("%d", "b"))
+    monkeypatch.setattr(cli.GitHubClient, "rate_limit", lambda self: "API quota 1/1")
+    monkeypatch.setattr(hist, "discover", lambda c, repo, *a: hist.DiscoverResult(repo, branch="main"))
+    assert cli.main(["discover-history", "x/1", "x/2", "x/3"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("::notice") == 1 and "x/3: 0 runs" in out

@@ -55,18 +55,59 @@ def env_label(artifact_name: str) -> str:
     return label or artifact_name
 
 
+TEST_WORKFLOW = re.compile(r"(?i)test|\bci\b|build|check")
+
+
 def junit_runs(client: GitHubClient, repo: str, pattern: str, branch: str,
-               max_pages: int) -> dict[int, list[dict]]:
+               max_pages: int, max_runs: int) -> tuple[dict[int, list[dict]], str]:
     """Unexpired JUnit-looking artifacts on `branch`, grouped by workflow run (newest first).
-    Uses the repo-wide artifacts listing: 100 artifacts per API call, any workflow."""
+
+    Tries the repo-wide artifacts listing first (100 artifacts per call, any workflow). Large
+    repos make that endpoint time out with HTTP 5xx, so it falls back to scanning the runs of
+    workflows that look like test workflows. Returns (runs, method used)."""
     rx = re.compile(pattern)
+    try:
+        runs: dict[int, list[dict]] = {}
+        for art in client.list_repo_artifacts(repo, max_pages=max_pages):
+            run = art.get("workflow_run") or {}
+            if art.get("expired") or not rx.search(art["name"]) or run.get("head_branch") != branch:
+                continue
+            if run["id"] not in runs and len(runs) >= max_runs:
+                break
+            runs.setdefault(run["id"], []).append(art)
+        return runs, "repo artifacts"
+    except GitHubError as exc:
+        if exc.status < 500:
+            raise
+    return _junit_runs_by_workflow(client, repo, rx, branch, max_runs)
+
+
+def _junit_runs_by_workflow(client: GitHubClient, repo: str, rx: re.Pattern, branch: str,
+                            max_runs: int, max_workflows: int = 4) -> tuple[dict[int, list[dict]], str]:
+    workflows = client.get(f"/repos/{repo}/actions/workflows", per_page=100)["workflows"]
+    candidates = [w for w in workflows
+                  if w.get("state") == "active" and TEST_WORKFLOW.search(f"{w['name']} {w['path']}")]
+    # Workflows named like tests first.
+    candidates.sort(key=lambda w: "test" not in w["name"].lower())
     runs: dict[int, list[dict]] = {}
-    for art in client.list_repo_artifacts(repo, max_pages=max_pages):
-        run = art.get("workflow_run") or {}
-        if art.get("expired") or not rx.search(art["name"]) or run.get("head_branch") != branch:
-            continue
-        runs.setdefault(run["id"], []).append(art)
-    return runs
+    used = []
+    for wf in candidates[:max_workflows]:
+        found = 0
+        for run in client.paginate(f"/repos/{repo}/actions/workflows/{wf['id']}/runs",
+                                   key="workflow_runs", max_pages=1, branch=branch,
+                                   status="completed", per_page=min(max_runs * 2, 100)):
+            arts = [a for a in client.list_run_artifacts(repo, run["id"])
+                    if rx.search(a["name"]) and not a.get("expired")]
+            if arts:
+                runs[run["id"]] = arts
+                found += 1
+                if len(runs) >= max_runs:
+                    break
+        if found:
+            used.append(wf["name"])
+        if len(runs) >= max_runs:
+            break
+    return runs, f"workflows: {', '.join(used) or 'none matched'}"
 
 
 def extract_junit(blob: bytes, max_entries: int = 5000, max_uncompressed_mb: int = 1024) -> list[junit.TestResult]:
@@ -90,6 +131,7 @@ def extract_junit(blob: bytes, max_entries: int = 5000, max_uncompressed_mb: int
 class DiscoverResult:
     repo: str
     branch: str = ""
+    method: str = ""
     runs_with_junit: int = 0
     avg_mb: float = 0.0
     names: list[str] = field(default_factory=list)
@@ -99,7 +141,8 @@ class DiscoverResult:
         if self.error:
             return f"{self.repo}: error {self.error}"
         return (f"{self.repo}: {self.runs_with_junit} runs on {self.branch} with JUnit artifacts, "
-                f"avg {self.avg_mb:.1f} MB/run, e.g. {', '.join(self.names[:3]) or '-'}")
+                f"avg {self.avg_mb:.1f} MB/run, e.g. {', '.join(self.names[:3]) or '-'} "
+                f"[{self.method}]")
 
 
 def default_branch(client: GitHubClient, repo: str) -> str:
@@ -107,11 +150,11 @@ def default_branch(client: GitHubClient, repo: str) -> str:
 
 
 def discover(client: GitHubClient, repo: str, pattern: str = DEFAULT_PATTERN,
-             sample_pages: int = 3) -> DiscoverResult:
+             sample_pages: int = 3, sample_runs: int = 10) -> DiscoverResult:
     out = DiscoverResult(repo)
     try:
         out.branch = default_branch(client, repo)
-        runs = junit_runs(client, repo, pattern, out.branch, sample_pages)
+        runs, out.method = junit_runs(client, repo, pattern, out.branch, sample_pages, sample_runs)
         out.runs_with_junit = len(runs)
         sizes = [sum(a["size_in_bytes"] for a in arts) / MB for arts in runs.values()]
         out.avg_mb = sum(sizes) / len(sizes) if sizes else 0.0
@@ -150,8 +193,8 @@ def import_repo(engine: Engine, client: GitHubClient, repo: str, cfg: HistoryCon
     All shards of one environment in a run are stored together as one test run."""
     out = ImportResult(repo)
     branch = default_branch(client, repo)
-    runs = junit_runs(client, repo, cfg.artifact_pattern, branch, max_pages)
-    for run_id, arts in list(runs.items())[: cfg.max_runs]:
+    runs, _ = junit_runs(client, repo, cfg.artifact_pattern, branch, max_pages, cfg.max_runs)
+    for run_id, arts in runs.items():
         if out.results >= cfg.max_results_per_repo:
             out.errors.append(f"stopped at max_results_per_repo={cfg.max_results_per_repo}")
             break
