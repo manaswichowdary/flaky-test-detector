@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.pytest_cache/
+*.db
+*.sqlite
+/junit-out/
+/report/
+.env
