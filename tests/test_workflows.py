@@ -69,3 +69,10 @@ def test_history_workflow():
     text = (ROOT / ".github/workflows/history.yml").read_text()
     assert "secrets.FLAKY_DATABASE_URL" in text and "--require-persistent-db import-history" in text
     assert "postgres://" not in text and "postgresql://" not in text
+
+
+def test_push_and_pr_do_not_double_run():
+    for rel in (".github/workflows/ci.yml", ".github/workflows/demo.yml"):
+        wf = load(rel)
+        on = wf[True] if True in wf else wf["on"]
+        assert on["push"]["branches"] == ["main"] and "pull_request" in on, rel
