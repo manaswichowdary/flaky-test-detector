@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import random
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
 from sqlalchemy import insert, select, update
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.engine import Connection, Engine
 
 from . import db
@@ -94,11 +97,39 @@ def run_exists(engine: Engine, repo: str, run_id: str, run_attempt: int = 1) -> 
             db.runs.c.run_attempt == run_attempt)).first() is not None
 
 
+# Postgres SQLSTATEs worth retrying: deadlock, serialization failure, and unique violation
+# (two shards inserting the same new test or run at the same moment).
+RETRY_SQLSTATES = {"40P01", "40001", "23505"}
+
+
+def is_retryable(exc: DBAPIError) -> bool:
+    orig = getattr(exc, "orig", None)
+    if getattr(orig, "sqlstate", None) in RETRY_SQLSTATES:
+        return True
+    return isinstance(exc, (OperationalError, IntegrityError)) and "locked" in str(orig).lower()
+
+
 def ingest(engine: Engine, repo: str, meta: RunMeta, results: list[TestResult],
-           resolver: Resolver | None = None, bulk: bool = False) -> IngestResult:
-    """Store one run. `bulk=True` resolves test ids exactly, in batches (history imports)."""
-    resolver = resolver or exact_resolver
-    results = merge_attempts(list(results))
+           resolver: Resolver | None = None, bulk: bool = False, attempts: int = 6,
+           sleep: Callable[[float], None] = time.sleep) -> IngestResult:
+    """Store one run. `bulk=True` resolves test ids exactly, in batches (history imports).
+
+    Parallel CI shards write to the same rows, so the transaction is retried with jittered
+    backoff on deadlocks and concurrent-insert conflicts; tests are resolved in sorted order
+    so concurrent writers lock rows in the same order."""
+    results = sorted(merge_attempts(list(results)), key=lambda r: r.test_id)
+    for attempt in range(attempts):
+        try:
+            return _ingest_once(engine, repo, meta, results, resolver or exact_resolver, bulk)
+        except DBAPIError as exc:
+            if attempt == attempts - 1 or not is_retryable(exc):
+                raise
+            sleep(min(0.2 * 2 ** attempt, 5.0) * (0.5 + random.random()))
+    raise AssertionError("unreachable")
+
+
+def _ingest_once(engine: Engine, repo: str, meta: RunMeta, results: list[TestResult],
+                 resolver: Resolver, bulk: bool) -> IngestResult:
     now = db.utcnow()
     completed = db.to_naive_utc(meta.completed_at) or now
     with engine.begin() as conn:
