@@ -1,5 +1,9 @@
 # Flaky Test Detector
 
+![Flakiest tests report](docs/images/report.png)
+
+**[View the live report](https://manaswichowdary.github.io/flaky-test-detector/)**
+
 A GitHub Action plus a small service that finds tests that pass and fail at random, tells
 you on the PR when a failure is probably flaky, and opens an issue to quarantine the test.
 
