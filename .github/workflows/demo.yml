@@ -46,7 +46,7 @@ jobs:
         env:
           FLAKY_QUARANTINE_FILE: quarantine.txt
         run: >
-          python -m pytest demo/tests -o addopts= -p flakydetect.pytest_plugin
+          python -m pytest demo/tests demo/fixed -o addopts= -p flakydetect.pytest_plugin
           --junitxml=junit/demo.xml -q
       - name: Upload results to flakydetect
         if: always()
