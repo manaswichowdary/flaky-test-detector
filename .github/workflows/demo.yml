@@ -39,6 +39,8 @@ jobs:
           FLAKY_DATABASE_URL: ${{ secrets.FLAKY_DATABASE_URL }}
         run: flakydetect --require-persistent-db quarantine-list > quarantine.txt
       - name: Run demo tests
+        # Failures are judged by the notify job: flaky ones don't block, real ones do.
+        continue-on-error: true
         env:
           FLAKY_QUARANTINE_FILE: quarantine.txt
         run: >
@@ -64,6 +66,7 @@ jobs:
         with:
           command: notify
           database-url: ${{ secrets.FLAKY_DATABASE_URL }}
+          fail-on-real-failures: "true"
 
   meta:
     if: github.event_name == 'workflow_dispatch' && inputs.run_meta_checks

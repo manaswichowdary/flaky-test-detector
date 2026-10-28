@@ -41,6 +41,14 @@ def test_commenting_workflows_have_permissions():
         assert load(rel)["permissions"] == WRITE_PERMS, rel
 
 
+def test_demo_gates_on_real_failures_only():
+    jobs = load(".github/workflows/demo.yml")["jobs"]
+    test_step = next(s for s in jobs["demo"]["steps"] if s.get("name") == "Run demo tests")
+    assert test_step["continue-on-error"] is True
+    notify = next(s for s in jobs["notify"]["steps"] if s.get("uses") == "./")
+    assert notify["with"]["fail-on-real-failures"] == "true"
+
+
 def test_demo_job_installs_pytest():
     steps = load(".github/workflows/demo.yml")["jobs"]["demo"]["steps"]
     installs = [s["run"] for s in steps if s.get("run", "").startswith("pip install")]

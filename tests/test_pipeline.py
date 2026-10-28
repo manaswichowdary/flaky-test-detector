@@ -60,3 +60,20 @@ def test_notify_without_token_fails_clearly(monkeypatch, tmp_path, capsys):
 def test_quarantine_list_only_in_auto_mode(gh, monkeypatch, capsys):
     assert cli.main(["quarantine-list"]) == 0
     assert capsys.readouterr().out == ""
+
+
+def test_gate_fails_only_on_real_failures(gh, tmp_path, capsys):
+    real = """<testsuite><testcase classname="m" name="test_real"><failure message="boom"/></testcase></testsuite>"""
+    for shard, flaky in [(1, ""), (2, FAIL)]:
+        xml = tmp_path / f"s{shard}.xml"
+        xml.write_text(RUN.format(flaky=flaky))
+        cli.main(["ingest", str(xml), "--run-id", f"r{shard}"])
+    cli.main(["score"])
+    assert cli.main(["notify", "--fail-on-real-failures"]) == 0  # only a flaky failure
+    (tmp_path / "s3.xml").write_text(real)
+    cli.main(["ingest", str(tmp_path / "s3.xml"), "--run-id", "r3"])
+    cli.main(["score"])
+    capsys.readouterr()
+    assert cli.main(["notify", "--fail-on-real-failures"]) == 1
+    assert "1 failure(s) look real: m::test_real" in capsys.readouterr().err
+    assert cli.main(["notify"]) == 0  # warn-only without the flag

@@ -26,6 +26,9 @@ inputs:
   source:
     description: Label stored on the run (ci, demo, ...).
     default: ci
+  fail-on-real-failures:
+    description: "notify: fail this step when a failure on the commit is not classified flaky"
+    default: "false"
   python-version:
     default: "3.12"
 
@@ -61,7 +64,9 @@ runs:
         FLAKY_DATABASE_URL: ${{ inputs.database-url }}
         FLAKY_MODE: ${{ inputs.mode }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        GATE: ${{ inputs.fail-on-real-failures == 'true' && '--fail-on-real-failures' || '' }}
       run: |
         trap 'echo "::error title=flakydetect action::notify step failed at: $BASH_COMMAND (exit $?)"' ERR
         flakydetect --require-persistent-db score
-        flakydetect --require-persistent-db notify
+        # shellcheck disable=SC2086
+        flakydetect --require-persistent-db notify $GATE

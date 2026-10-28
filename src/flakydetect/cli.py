@@ -70,6 +70,10 @@ def cmd_notify(args, settings) -> int:
              f"issues opened: {len(out.issues_opened)}; comment: {out.comment_id or 'none'}"]
     lines += [f"  {'flaky' if v.flaky else 'real '}  {v.test_id}" for v in out.verdicts]
     output.result("notify", "\n".join(lines))
+    real = [v.test_id for v in out.verdicts if not v.flaky]
+    if args.fail_on_real_failures and real:
+        output.error(f"{len(real)} failure(s) look real: {', '.join(real[:10])}")
+        return 1
     return 0
 
 
@@ -147,6 +151,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo")
     p.add_argument("--sha")
     p.add_argument("--pr", type=int)
+    p.add_argument("--fail-on-real-failures", action="store_true",
+                   help="exit 1 if any failure on this commit is not classified flaky")
     p.set_defaults(func=cmd_notify)
 
     p = sub.add_parser("discover-history", help="find which public repos publish JUnit artifacts")
