@@ -239,3 +239,4 @@ The CLI commands are `ingest`, `score`, `notify`, `quarantine-list`, `discover-h
 `import-history`, `report`, `metrics` and `db-size`. In GitHub Actions each prints its
 result as a workflow annotation, and any connection string in an error is redacted.
 Tokens only ever come from environment variables or secrets.
+
