@@ -33,7 +33,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: pip install -e .
+      - run: pip install -e . pytest
       - name: Fetch quarantine list (auto mode only)
         env:
           FLAKY_DATABASE_URL: ${{ secrets.FLAKY_DATABASE_URL }}

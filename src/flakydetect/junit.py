@@ -118,6 +118,8 @@ def parse_paths(paths: list[str | Path]) -> list[TestResult]:
     """Parse files and directories (recursively, *.xml)."""
     results: list[TestResult] = []
     for p in map(Path, paths):
+        if not p.exists():
+            raise JUnitParseError(f"no JUnit XML at {p} (did the test step run and write it?)")
         files = sorted(p.rglob("*.xml")) if p.is_dir() else [p]
         for f in files:
             results.extend(parse_file(f))

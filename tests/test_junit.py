@@ -71,3 +71,8 @@ def test_parse_paths_walks_directories(tmp_path):
     (tmp_path / "sub" / "a.xml").write_text('<testsuite><testcase classname="c" name="n"/></testsuite>')
     (tmp_path / "notes.txt").write_text("ignore me")
     assert [r.test_id for r in junit.parse_paths([tmp_path])] == ["c::n"]
+
+
+def test_missing_path_is_a_clear_error(tmp_path):
+    with pytest.raises(JUnitParseError, match="did the test step run"):
+        junit.parse_paths([tmp_path / "nope.xml"])
