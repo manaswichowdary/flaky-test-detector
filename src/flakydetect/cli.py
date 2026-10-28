@@ -1,0 +1,278 @@
+"""flakydetect: find flaky tests from JUnit results."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from sqlalchemy.exc import SQLAlchemyError
+
+from . import config, db, ghenv, history, junit, metrics, notifier, output, report, scorer
+from .collector import RunMeta, ingest
+from .github_api import GitHubClient, GitHubError, MissingTokenError
+from .identity import make_resolver
+
+
+def _engine(settings: config.Settings, require_persistent: bool):
+    url = config.require_persistent_db(settings) if require_persistent else settings.db_url
+    engine = db.get_engine(url)
+    db.init_db(engine)
+    return engine
+
+
+def cmd_ingest(args, settings) -> int:
+    gh = ghenv.run_metadata()
+    repo = args.repo or gh["repo"]
+    run_id = args.run_id or gh["run_id"]
+    sha = args.sha or gh["sha"]
+    if not (repo and run_id and sha):
+        output.error("--repo, --run-id and --sha are required outside GitHub Actions")
+        return 2
+    results = junit.parse_paths(args.paths)
+    meta = RunMeta(
+        run_id=run_id, sha=sha, run_attempt=args.run_attempt or gh["run_attempt"],
+        branch=args.branch or gh["branch"], pr_number=args.pr or gh["pr_number"],
+        workflow=args.workflow or gh["workflow"], source=args.source,
+    )
+    engine = _engine(settings, args.require_persistent_db)
+    out = ingest(engine, repo, meta, results, resolver=make_resolver(settings))
+    state = "already ingested" if out.duplicate else f"stored {out.inserted} results"
+    output.result("ingest", f"run {run_id} attempt {meta.run_attempt}: {state}")
+    return 0
+
+
+def cmd_score(args, settings) -> int:
+    repo = args.repo or ghenv.run_metadata()["repo"]
+    if not repo:
+        output.error("--repo is required outside GitHub Actions")
+        return 2
+    engine = _engine(settings, args.require_persistent_db)
+    scores = scorer.score_repo(engine, repo, settings)
+    flaky = sorted((s for s in scores if s.is_flaky), key=lambda s: -s.score)
+    lines = [f"scored {len(scores)} tests in {repo}: {len(flaky)} flaky"]
+    lines += [f"  {s.score:5.2f}  mixed={s.mixed_commits} reruns={s.rerun_passes}  {s.test_id}"
+              for s in flaky[: args.top]]
+    output.result("score", "\n".join(lines))
+    return 0
+
+
+def cmd_notify(args, settings) -> int:
+    gh = ghenv.run_metadata()
+    repo, sha = args.repo or gh["repo"], args.sha or gh["sha"]
+    pr = args.pr or gh["pr_number"]
+    if not (repo and sha):
+        output.error("--repo and --sha are required outside GitHub Actions")
+        return 2
+    engine = _engine(settings, args.require_persistent_db)
+    out = notifier.notify(engine, GitHubClient(), settings, repo, sha, pr)
+    flaky = sum(v.flaky for v in out.verdicts)
+    lines = [f"{len(out.verdicts)} failing tests ({flaky} flaky); "
+             f"issues opened: {len(out.issues_opened)}; comment: {out.comment_id or 'none'}"]
+    lines += [f"  {'flaky' if v.flaky else 'real '}  {v.test_id}" for v in out.verdicts]
+    output.result("notify", "\n".join(lines))
+    real = [v.test_id for v in out.verdicts if not v.flaky]
+    if args.fail_on_real_failures and real:
+        output.error(f"{len(real)} failure(s) look real: {', '.join(real[:10])}")
+        return 1
+    return 0
+
+
+def cmd_quarantine_list(args, settings) -> int:
+    repo = args.repo or ghenv.run_metadata()["repo"]
+    if args.require_persistent_db:
+        config.require_persistent_db(settings)  # fail early even when the list is unused
+    if settings.mode != "auto":
+        return 0  # only auto mode skips tests
+    engine = _engine(settings, args.require_persistent_db)
+    for test_id in notifier.quarantined_tests(engine, repo):
+        print(test_id)
+    return 0
+
+
+def cmd_discover_history(args, settings) -> int:
+    cfg = history.load_config(args.history_config)
+    repos = args.repos or cfg.candidates
+    if not repos:
+        output.error("no candidate repos (pass them or set candidates in history.toml)")
+        return 2
+    client = GitHubClient()
+    lines = [client.rate_limit()]
+    for repo in repos:
+        lines.append(history.discover(client, repo, cfg.pattern_for(repo), cfg.sample_pages).summary())
+        print(lines[-1], flush=True)
+    # One annotation for everything: GitHub keeps only 10 notices per step.
+    output.result("discover-history", "\n".join(lines))
+    return 0
+
+
+def cmd_import_history(args, settings) -> int:
+    cfg = history.load_config(args.history_config)
+    if args.max_runs:
+        cfg.max_runs = args.max_runs
+    repos = args.repos or cfg.repos
+    if not repos:
+        output.result("import-history", "no repos selected in history.toml; nothing to import")
+        return 0
+    client = GitHubClient()
+    engine = _engine(settings, args.require_persistent_db)
+    try:
+        start_mb = history.check_db_size(engine, cfg.max_db_mb)
+    except history.DatabaseFull as exc:
+        output.error(f"not importing: {exc}")
+        return 3
+    output.result("import-history", f"{client.rate_limit()}; database {start_mb:.1f} MB "
+                                    f"(limit {cfg.max_db_mb:.0f} MB)")
+    full = False
+    for repo in repos:
+        res = history.import_repo(engine, client, repo, cfg)
+        scores = scorer.score_repo(engine, repo, settings)
+        flaky = sorted((s for s in scores if s.is_flaky), key=lambda s: -s.score)
+        size = db.database_size_mb(engine)
+        lines = [res.summary(),
+                 f"{repo}: {len(scores)} tests scored, {len(flaky)} flaky; database now {size:.1f} MB"]
+        lines += [f"  {s.score:.2f} {s.test_id}" for s in flaky[:10]]
+        lines += [f"  warning: {e}" for e in res.errors[:5]]
+        output.result("import-history", "\n".join(lines))
+        if size > cfg.max_db_mb:
+            full = True
+            break
+    if full:
+        output.error(f"stopped: database passed max_db_mb={cfg.max_db_mb:.0f} MB")
+        return 3
+    return 0
+
+
+def cmd_report(args, settings) -> int:
+    engine = _engine(settings, args.require_persistent_db)
+    if args.rescore:
+        with engine.connect() as conn:
+            repos = conn.execute(db.select_repos()).scalars().all()
+        for repo in repos:
+            scorer.score_repo(engine, repo, settings)
+    path, data = report.write(engine, args.out, args.limit)
+    flaky = sum(r.flaky for r in data.repos)
+    output.result("report", f"wrote {path}: {len(data.rows)} rows, {flaky} flaky tests, "
+                            f"{data.total_runs} runs across {len(data.repos)} repos")
+    return 0
+
+
+def _load_planted() -> dict[str, str]:
+    """Ground truth from the demo suite's `# PLANTED-FLAKY` markers (repo checkout only)."""
+    sys.path.insert(0, ".")
+    from demo.planted import planted  # noqa: PLC0415
+    return planted()
+
+
+def cmd_metrics(args, settings) -> int:
+    repo = args.repo or ghenv.run_metadata()["repo"]
+    if not repo:
+        output.error("--repo is required outside GitHub Actions")
+        return 2
+    engine = _engine(settings, args.require_persistent_db)
+    sample = history.load_config(args.history_config).repo_sample
+    m = metrics.compute(engine, repo, _load_planted(), sample=sample)
+    if args.json:
+        Path(args.json).write_text(m.to_json() + "\n")
+    output.result("metrics", m.markdown())
+    output.result("metrics json", m.to_json())
+    return 0
+
+
+def cmd_db_size(args, settings) -> int:
+    engine = _engine(settings, args.require_persistent_db)
+    output.result("db-size", f"database {db.database_size_mb(engine):.1f} MB")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="flakydetect", description=__doc__)
+    parser.add_argument("--config", help="path to flakydetect.toml")
+    parser.add_argument("--require-persistent-db", action="store_true",
+                        help="fail unless FLAKY_DATABASE_URL points at Postgres (use in CI)")
+    sub = parser.add_subparsers(dest="command")
+
+    p = sub.add_parser("ingest", help="store JUnit results for one CI run")
+    p.add_argument("paths", nargs="+", help="JUnit XML files or directories")
+    p.add_argument("--repo")
+    p.add_argument("--run-id")
+    p.add_argument("--run-attempt", type=int)
+    p.add_argument("--sha")
+    p.add_argument("--branch")
+    p.add_argument("--pr", type=int)
+    p.add_argument("--workflow")
+    p.add_argument("--source", default="ci")
+    p.set_defaults(func=cmd_ingest)
+
+    p = sub.add_parser("score", help="recompute flakiness scores for a repo")
+    p.add_argument("--repo")
+    p.add_argument("--top", type=int, default=20)
+    p.set_defaults(func=cmd_score)
+
+    p = sub.add_parser("notify", help="comment on the PR and open quarantine issues")
+    p.add_argument("--repo")
+    p.add_argument("--sha")
+    p.add_argument("--pr", type=int)
+    p.add_argument("--fail-on-real-failures", action="store_true",
+                   help="exit 1 if any failure on this commit is not classified flaky")
+    p.set_defaults(func=cmd_notify)
+
+    p = sub.add_parser("discover-history", help="find which public repos publish JUnit artifacts")
+    p.add_argument("repos", nargs="*")
+    p.add_argument("--history-config", default="history.toml")
+    p.set_defaults(func=cmd_discover_history)
+
+    p = sub.add_parser("import-history", help="import JUnit artifacts from public repos")
+    p.add_argument("repos", nargs="*")
+    p.add_argument("--history-config", default="history.toml")
+    p.add_argument("--max-runs", type=int)
+    p.set_defaults(func=cmd_import_history)
+
+    p = sub.add_parser("report", help="write the static HTML report of the flakiest tests")
+    p.add_argument("--out", default="report")
+    p.add_argument("--limit", type=int, default=200)
+    p.add_argument("--rescore", action="store_true", help="recompute scores for every repo first")
+    p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("metrics", help="compute the README numbers for the demo repo")
+    p.add_argument("--repo")
+    p.add_argument("--json", help="also write the raw numbers to this file")
+    p.add_argument("--history-config", default="history.toml", help="sampling rates of imported repos")
+    p.set_defaults(func=cmd_metrics)
+
+    p = sub.add_parser("db-size", help="print the database size in MB")
+    p.set_defaults(func=cmd_db_size)
+
+    p = sub.add_parser("quarantine-list", help="print quarantined test ids (auto mode only)")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_quarantine_list)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.print_help()
+        return 0
+    try:
+        settings = config.load(args.config)
+        return args.func(args, settings)
+    except (config.ConfigError, junit.JUnitParseError, MissingTokenError, GitHubError) as exc:
+        output.error(str(exc))
+        return 2
+    except SQLAlchemyError as exc:
+        # Keep the driver's message (e.g. "password authentication failed"), drop the SQL.
+        detail = str(getattr(exc, "orig", None) or exc).strip().splitlines()
+        output.error(f"database error ({type(exc).__name__}): {' '.join(detail[:3])}")
+        return 2
+    except Exception as exc:  # noqa: BLE001  (surface anything else as a readable annotation)
+        import traceback
+        frame = traceback.extract_tb(exc.__traceback__)[-1]
+        output.error(f"unexpected {type(exc).__name__} at {frame.filename.rsplit('/', 1)[-1]}:"
+                     f"{frame.lineno}: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

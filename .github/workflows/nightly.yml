@@ -1,0 +1,59 @@
+name: Nightly flaky report
+
+# Rescores every repo in the database and publishes the static HTML report.
+# Scheduled runs use the default branch; the report is also kept as an artifact.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - src/flakydetect/report.py
+      - src/flakydetect/templates/**
+      - .github/workflows/nightly.yml
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+concurrency:
+  group: nightly-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Build report
+        env:
+          FLAKY_DATABASE_URL: ${{ secrets.FLAKY_DATABASE_URL }}
+        run: flakydetect --require-persistent-db report --rescore --out report
+      - name: Measure README metrics
+        env:
+          FLAKY_DATABASE_URL: ${{ secrets.FLAKY_DATABASE_URL }}
+        run: flakydetect --require-persistent-db metrics --json report/metrics.json
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: report
+
+  deploy:
+    needs: report
+    # GitHub Pages only accepts deployments from the default branch by default.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

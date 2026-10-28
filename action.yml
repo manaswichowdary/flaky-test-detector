@@ -1,0 +1,72 @@
+name: Flaky Test Detector
+description: Store JUnit results, score flaky tests, comment on PRs and open quarantine issues.
+branding:
+  icon: alert-triangle
+  color: orange
+
+inputs:
+  command:
+    description: "ingest | notify | all. Use ingest in matrix jobs and notify once afterwards."
+    default: all
+  junit-path:
+    description: JUnit XML file(s) or directory (space separated). Needed for ingest.
+    default: ""
+  database-url:
+    description: Persistent Postgres URL. Pass secrets.FLAKY_DATABASE_URL.
+    required: true
+  github-token:
+    description: Token for comments and issues.
+    default: ${{ github.token }}
+  mode:
+    description: "warn | issue | auto (overrides flakydetect.toml)"
+    default: ""
+  run-key:
+    description: Unique id for this test run. Defaults to run_id-job; add the matrix index in matrix jobs.
+    default: ""
+  source:
+    description: Label stored on the run (ci, demo, ...).
+    default: ci
+  fail-on-real-failures:
+    description: "notify: fail this step when a failure on the commit is not classified flaky"
+    default: "false"
+  python-version:
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install flakydetect
+      shell: bash
+      run: |
+        trap 'echo "::error title=flakydetect action::installing flakydetect failed (exit $?)"' ERR
+        pip install --quiet --disable-pip-version-check "${{ github.action_path }}"
+    - name: Ingest test results
+      if: inputs.command == 'ingest' || inputs.command == 'all'
+      shell: bash
+      env:
+        FLAKY_DATABASE_URL: ${{ inputs.database-url }}
+        FLAKY_MODE: ${{ inputs.mode }}
+        RUN_KEY: ${{ inputs.run-key || format('{0}-{1}', github.run_id, github.job) }}
+        JUNIT_PATH: ${{ inputs.junit-path }}
+        SOURCE: ${{ inputs.source }}
+      run: |
+        trap 'echo "::error title=flakydetect action::ingest step failed at: $BASH_COMMAND (exit $?)"' ERR
+        if [ -z "$JUNIT_PATH" ]; then echo "::error::junit-path is required for ingest"; exit 2; fi
+        # shellcheck disable=SC2086
+        flakydetect --require-persistent-db ingest $JUNIT_PATH --run-id "$RUN_KEY" --source "$SOURCE"
+    - name: Score and notify
+      if: inputs.command == 'notify' || inputs.command == 'all'
+      shell: bash
+      env:
+        FLAKY_DATABASE_URL: ${{ inputs.database-url }}
+        FLAKY_MODE: ${{ inputs.mode }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GATE: ${{ inputs.fail-on-real-failures == 'true' && '--fail-on-real-failures' || '' }}
+      run: |
+        trap 'echo "::error title=flakydetect action::notify step failed at: $BASH_COMMAND (exit $?)"' ERR
+        flakydetect --require-persistent-db score
+        # shellcheck disable=SC2086
+        flakydetect --require-persistent-db notify $GATE

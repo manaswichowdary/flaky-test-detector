@@ -1,0 +1,82 @@
+name: Demo flaky suite
+
+on:
+  # Branch changes are covered by pull_request; push only for main, so each change
+  # runs once instead of twice.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_meta_checks:
+        description: Also run the slow demo behaviour checks
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+concurrency:
+  group: demo-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  demo:
+    # Three runs of the same commit, so flaky tests show both pass and fail.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pytest
+      - name: Fetch quarantine list (auto mode only)
+        env:
+          FLAKY_DATABASE_URL: ${{ secrets.FLAKY_DATABASE_URL }}
+        run: flakydetect --require-persistent-db quarantine-list > quarantine.txt
+      - name: Run demo tests
+        # Failures are judged by the notify job: flaky ones don't block, real ones do.
+        continue-on-error: true
+        env:
+          FLAKY_QUARANTINE_FILE: quarantine.txt
+        run: >
+          python -m pytest demo/tests demo/fixed -o addopts= -p flakydetect.pytest_plugin
+          --junitxml=junit/demo.xml -q
+      - name: Upload results to flakydetect
+        if: always()
+        uses: ./
+        with:
+          command: ingest
+          junit-path: junit/demo.xml
+          database-url: ${{ secrets.FLAKY_DATABASE_URL }}
+          run-key: ${{ github.run_id }}-demo-${{ matrix.shard }}
+          source: demo
+
+  notify:
+    needs: demo
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./
+        with:
+          command: notify
+          database-url: ${{ secrets.FLAKY_DATABASE_URL }}
+          fail-on-real-failures: "true"
+
+  meta:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_meta_checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest demo/meta -o addopts= -q

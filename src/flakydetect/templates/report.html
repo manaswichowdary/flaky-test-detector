@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flakiest Tests</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
+    --accent: #3b5bdb; --pass: #2f9e44; --fail: #e03131; --rerun: #f08c00; --skip: #adb5bd;
+    --flaky-bg: #fff4e6; --flaky-text: #a85d00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151515; --panel: #1e1e1e; --text: #ececec; --muted: #9a9a95; --line: #2e2e2e;
+      --accent: #748ffc; --pass: #51cf66; --fail: #ff6b6b; --rerun: #ffa94d; --skip: #5c5f66;
+      --flaky-bg: #3a2a12; --flaky-text: #ffc078;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #151515; --panel: #1e1e1e; --text: #ececec; --muted: #9a9a95; --line: #2e2e2e;
+    --accent: #748ffc; --pass: #51cf66; --fail: #ff6b6b; --rerun: #ffa94d; --skip: #5c5f66;
+    --flaky-bg: #3a2a12; --flaky-text: #ffc078;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .card .repo { font-weight: 600; overflow-wrap: anywhere; }
+  .card .nums { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .controls input, .controls select { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+         border-radius: 6px; padding: 6px 8px; font: inherit; }
+  .controls input { flex: 1 1 240px; }
+  .table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); white-space: nowrap; }
+  th button { all: unset; cursor: pointer; }
+  th button:focus-visible { outline: 2px solid var(--accent); border-radius: 3px; }
+  th[aria-sort="ascending"] button::after { content: " ▲"; }
+  th[aria-sort="descending"] button::after { content: " ▼"; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  th.num { text-align: right; }
+  .test { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; overflow-wrap: anywhere; }
+  .repo-cell { color: var(--muted); font-size: 12.5px; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 10px;
+           background: var(--flaky-bg); color: var(--flaky-text); margin-left: 6px; }
+  .strip { display: flex; gap: 2px; }
+  .strip i { width: 6px; height: 14px; border-radius: 1px; display: inline-block; }
+  .strip .p { background: var(--pass); } .strip .f { background: var(--fail); }
+  .strip .r { background: var(--rerun); } .strip .s { background: var(--skip); }
+  a { color: var(--accent); }
+  .empty { padding: 32px; text-align: center; color: var(--muted); }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 1px; margin: 0 4px 0 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Flakiest tests</h1>
+  <p class="sub">Generated {{ data.generated_at.strftime("%Y-%m-%d %H:%M UTC") }} ·
+    {{ data.total_runs }} CI test runs analyzed across {{ data.repos|length }} repos</p>
+
+  <section class="cards" aria-label="Repositories">
+    {% for r in data.repos %}
+    <div class="card" data-repo="{{ r.repo }}">
+      <div class="repo">{{ r.repo }}</div>
+      <div class="nums">{{ r.flaky }} flaky · {{ r.tests }} tests · {{ r.runs }} runs</div>
+    </div>
+    {% endfor %}
+  </section>
+
+  {% if data.rows %}
+  <div class="controls">
+    <input id="search" type="search" placeholder="Filter tests…" aria-label="Filter tests">
+    <select id="repo-filter" aria-label="Repository">
+      <option value="">All repositories</option>
+      {% for r in data.repos %}<option value="{{ r.repo }}">{{ r.repo }}</option>{% endfor %}
+    </select>
+    <label><input id="flaky-only" type="checkbox"> Flaky only</label>
+  </div>
+  <div class="table-wrap">
+    <table id="tests">
+      <thead><tr>
+        <th data-key="test" data-type="text"><button type="button">Test</button></th>
+        <th class="num" data-key="score" data-type="num" aria-sort="descending"><button type="button">Score</button></th>
+        <th class="num" data-key="mixed" data-type="num"><button type="button">Mixed commits</button></th>
+        <th class="num" data-key="reruns" data-type="num"><button type="button">Rerun passes</button></th>
+        <th class="num" data-key="runs" data-type="num"><button type="button">Runs</button></th>
+        <th class="num" data-key="failures" data-type="num"><button type="button">Failures</button></th>
+        <th data-key="last" data-type="text"><button type="button">Last failure</button></th>
+        <th>Recent</th>
+        <th>Issue</th>
+      </tr></thead>
+      <tbody>
+      {% for row in data.rows %}
+        <tr data-repo="{{ row.repo }}" data-flaky="{{ 1 if row.is_flaky else 0 }}"
+            data-test="{{ row.test_id }}" data-score="{{ row.score }}" data-mixed="{{ row.mixed_commits }}"
+            data-reruns="{{ row.rerun_passes }}" data-runs="{{ row.runs_seen }}" data-failures="{{ row.failures }}"
+            data-last="{{ row.last_failure_at.isoformat() if row.last_failure_at else '' }}">
+          <td><div class="test">{{ row.test_id }}{% if row.is_flaky %}<span class="badge">flaky</span>{% endif %}</div>
+              <div class="repo-cell">{{ row.repo }}</div></td>
+          <td class="num">{{ "%.2f"|format(row.score) }}</td>
+          <td class="num">{{ row.mixed_commits }}</td>
+          <td class="num">{{ row.rerun_passes }}</td>
+          <td class="num">{{ row.runs_seen }}</td>
+          <td class="num">{{ row.failures }}</td>
+          <td>{{ row.last_failure_at.strftime("%Y-%m-%d %H:%M") if row.last_failure_at else "—" }}</td>
+          <td><span class="strip" aria-label="last {{ row.recent|length }} results">{% for m in row.recent %}<i class="{{ m }}" title="{{ {'p':'pass','f':'fail','r':'pass on rerun','s':'skipped'}[m] }}"></i>{% endfor %}</span></td>
+          <td>{% if row.issue_url %}<a href="{{ row.issue_url }}">#{{ row.issue_number }}</a>{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="empty" id="no-match" hidden>No tests match the filter.</div>
+  </div>
+  <p class="legend">Recent results, oldest to newest:<i class="p" style="background:var(--pass)"></i>pass
+    <i style="background:var(--rerun)"></i>pass on rerun<i style="background:var(--fail)"></i>fail
+    <i style="background:var(--skip)"></i>skipped</p>
+  {% else %}
+  <div class="table-wrap"><div class="empty" id="empty-state">No flaky tests or failures recorded yet.</div></div>
+  {% endif %}
+</main>
+<script>
+(function () {
+  const table = document.getElementById("tests");
+  if (!table) return;
+  const tbody = table.tBodies[0];
+  const rows = Array.from(tbody.rows);
+  const search = document.getElementById("search");
+  const repo = document.getElementById("repo-filter");
+  const flakyOnly = document.getElementById("flaky-only");
+  const noMatch = document.getElementById("no-match");
+
+  function applyFilter() {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach(function (tr) {
+      const ok = (!q || tr.dataset.test.toLowerCase().includes(q)) &&
+                 (!repo.value || tr.dataset.repo === repo.value) &&
+                 (!flakyOnly.checked || tr.dataset.flaky === "1");
+      tr.hidden = !ok;
+      if (ok) shown++;
+    });
+    noMatch.hidden = shown !== 0;
+  }
+  [search, repo, flakyOnly].forEach(function (el) { el.addEventListener("input", applyFilter); });
+
+  table.querySelectorAll("th[data-key]").forEach(function (th) {
+    th.querySelector("button").addEventListener("click", function () {
+      const key = th.dataset.key, numeric = th.dataset.type === "num";
+      const dir = th.getAttribute("aria-sort") === "descending" ? "ascending" : "descending";
+      table.querySelectorAll("th").forEach(function (h) { h.removeAttribute("aria-sort"); });
+      th.setAttribute("aria-sort", dir);
+      const sign = dir === "ascending" ? 1 : -1;
+      rows.sort(function (a, b) {
+        const x = a.dataset[key], y = b.dataset[key];
+        const cmp = numeric ? parseFloat(x) - parseFloat(y) : x.localeCompare(y);
+        return sign * cmp || a.dataset.test.localeCompare(b.dataset.test);
+      });
+      rows.forEach(function (tr) { tbody.appendChild(tr); });
+    });
+  });
+})();
+</script>
+</body>
+</html>

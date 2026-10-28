@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: flaky
+          POSTGRES_PASSWORD: flaky
+          POSTGRES_DB: flaky
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      # Throwaway service-container credentials, not a secret.
+      TEST_POSTGRES_URL: postgresql+psycopg://flaky:flaky@localhost:5432/flaky
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: python -m playwright install --with-deps chromium
+      # demo/ is excluded so planted flaky tests never fail project CI.
+      - run: pytest --ignore=demo -q
